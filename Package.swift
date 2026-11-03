@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "AgentDesk",
+    name: "Claudist",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "AgentDesk", targets: ["AgentDesk"]),
+        .executable(name: "Claudist", targets: ["Claudist"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -13,19 +13,19 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "AgentDeskCore",
+            name: "ClaudistCore",
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "AgentDesk",
-            dependencies: ["AgentDeskCore", .product(name: "GRDB", package: "GRDB.swift"),
+            name: "Claudist",
+            dependencies: ["ClaudistCore", .product(name: "GRDB", package: "GRDB.swift"),
                            .product(name: "MarkdownUI", package: "swift-markdown-ui")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "AgentDeskCoreTests",
-            dependencies: ["AgentDeskCore", .product(name: "GRDB", package: "GRDB.swift")],
+            name: "ClaudistCoreTests",
+            dependencies: ["ClaudistCore", .product(name: "GRDB", package: "GRDB.swift")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

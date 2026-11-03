@@ -1,4 +1,4 @@
-# AgentDesk — ТЗ
+# Claudist — ТЗ
 
 Нативное macOS-приложение (Swift + SwiftUI, macOS 14+, однопользовательское): менеджер задач в стиле Todoist, где исполнители задач — агенты Claude Code.
 
@@ -7,7 +7,7 @@
 | Тема | Решение |
 |---|---|
 | Платформа | Swift 6 + SwiftUI (+AppKit точечно), SwiftPM, сборка `.app` скриптом `scripts/bundle.sh` |
-| Данные | SQLite через GRDB, `~/Library/Application Support/AgentDesk/db.sqlite` |
+| Данные | SQLite через GRDB, `~/Library/Application Support/Claudist/db.sqlite` |
 | Агенты | Claude Code CLI (`claude -p`, stream-json), вход по подписке через браузер (`claude auth login --claudeai`), API-ключи не используются |
 | Секреты | Keychain (для плагинов) |
 | Синхронизация с внешними системами | Только импорт; дальше задача живёт локально |
@@ -29,15 +29,29 @@
 
 Расширения: `agent: <имя>`, `run: queued|running|waiting|done|failed|cancelled`, `run before:/after:`, `completed`, `completed before:/after:`.
 
-Реализация: `Sources/AgentDeskCore/Filter` — парсер → AST → SQL (GRDB).
+Реализация: `Sources/ClaudistCore/Filter` — парсер → AST → SQL (GRDB).
 
 ## Агенты
 
 - Агент = роль из `.md` (импорт формата `.claude/agents/*.md`: name, description, model, tools, тело = системный промпт) + **своя папка-проект** + скилы + папки хранилища + профиль разрешений + модель.
 - Память изолирована: cwd запуска = папка агента (CLAUDE.md, auto-memory per project), `--setting-sources project,local` отключает пользовательский `~/.claude/settings`. Одна папка не может принадлежать двум агентам.
-- **Библиотека скилов** — `~/Library/Application Support/AgentDesk/skills/<name>/SKILL.md`. Подключение к агенту = симлинк в `<папка агента>/.claude/skills/<name>`.
+- **Библиотека скилов** — `~/Library/Application Support/Claudist/skills/<name>/SKILL.md`. Подключение к агенту = симлинк в `<папка агента>/.claude/skills/<name>`.
+- **Генерация скилов** — Skills → Generate (новый) или Edit with Claude (существующий): Claude Code пишет SKILL.md и инструменты (`scripts/`, по умолчанию Python, язык выбирается или указывается в запросе) в черновике `…/skill-drafts/<id>`. Запуск: `--safe-mode --restricted --strict-mcp-config --no-session-persistence`, файловые инструменты ограничены черновиком (плюс проверка в приложении), Bash — опционально с подтверждением каждой команды. В библиотеку черновик попадает только по Save; секреты из раздела `## Required secrets` привязываются к скилу автоматически, если уже есть.
+- **Базы данных (SQLite)** — раздел Databases: новая пустая, сгенерированная Claude по описанию и/или образцам файлов (CSV/JSON/текст/SQLite; Claude без инструментов, видит начало файлов), или существующий файл по пути. Созданные лежат в `…/databases/`. «Change with Claude» пишет миграцию; SQL проверяется на пустой копии схемы в памяти, перед применением делается копия в `databases/backups/`, миграция идёт одной транзакцией с проверкой внешних ключей. Привязка к агенту и к задаче с доступом none/ro/rw (итог — объединение, побеждает rw); подзадачи наследуют базы задачи. Агент работает через MCP-инструменты `db_schema`, `db_query`, `db_execute` (последний — только при rw); ro открывается SQLite read-only, ATTACH запрещён. Скриптам передаются `DB_<NAME>_PATH` и `DB_<NAME>_URI` (мягкое ограничение). Экспорт включает созданные базы с данными.
 - **Хранилище** — глобальный список папок хоста; у агента для каждой: нет доступа / чтение / чтение и запись. Передаются через `--add-dir`; для «чтения» генерируются deny-правила `Edit`/`Write`. Ограничение мягкое: Bash его не перекрывает (жёсткая изоляция — sandbox, следующий этап).
-- **Разрешения**: режим (`manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`) + allow/deny-правила Claude Code. Настройки генерируются в `…/AgentDesk/settings/<agentId>.json` и передаются через `--settings`. Остальные запросы приходят в UI через `--permission-prompt-tool stdio` (`control_request: can_use_tool`): «Разрешить / Разрешать всегда / Отклонить» + уведомление macOS.
+- **Разрешения**: режим (`manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`) + allow/deny-правила Claude Code. Настройки генерируются в `…/Claudist/settings/<agentId>.json` и передаются через `--settings`. Остальные запросы приходят в UI через `--permission-prompt-tool stdio` (`control_request: can_use_tool`): «Разрешить / Разрешать всегда / Отклонить» + уведомление macOS.
+
+## Ассистент
+
+Раздел Assistant (⌘J) — системный чат с Claude, который знает, что находится внутри Claudist (`AssistantTools.systemPrompt`). Отдельный процесс Claude Code на чат (cwd `…/assistant`), без встроенных инструментов (`--tools ""`, `--disable-slash-commands`, `--strict-mcp-config`), только инструменты приложения на сервере `claudist`: обзор, проекты, поиск задач языком фильтров, задачи, агенты, запуски и их транскрипты, скилы, секреты (только имена), хранилище, базы (схема и read-only запросы), фильтры; изменения — создание/правка/удаление задач, комментарии, проекты, секции, фильтры, агенты и их доступы, базы задач, запуск/остановка задачи, ответ агенту. Изменения по умолчанию требуют подтверждения в чате («Ask before changes»); `bypassPermissions` ассистент выставить не может. История чатов — таблицы `assistantChat`/`assistantEvent`; простаивающий процесс закрывается через 5 минут, следующее сообщение продолжает сессию через `--resume`.
+
+Агенты получают в системном промпте раздел «Environment»: кто они, что работают в Claudist, что первое сообщение — задача, а итоговое сообщение — её результат.
+
+## Изоляция
+
+Один движок на всё приложение (Settings → Isolation, `UserDefaults` `isolation.engine`, по умолчанию `docker`; `none` — запуск на хосте). Движки реализуют протокол `IsolationEngine` (`status`, `prepare`, `wrap`, `stop`, `cleanUpOrphans`) и регистрируются в `Isolation.engines` — сюда добавляются Podman, VM, нативный sandbox Claude Code и т. п.
+
+Docker: весь процесс `claude` агента — в контейнере `docker run --rm -i --init`, non-root `node`, `--cap-drop ALL`, `no-new-privileges`. Монтируются только нужные пути по тем же абсолютным путям: папка агента (rw), файл настроек, включённые скилы, файлы секретов и базы (ro), хранилище и вложения по их доступу. У каждого агента свой home в `…/containers/homes/` (сессии для `--resume`, память). Вход — токен `claude setup-token` (год) в Keychain, передаётся как `CLAUDE_CODE_OAUTH_TOKEN`; значения секретов идут через окружение docker CLI, не через аргументы. Образ `claudist-agent:<версия Claude Code хоста>` собирается из встроенного Dockerfile при первом запуске или кнопкой. Инструменты приложения (ask_user, delegate, db_*) работают через stdio как раньше. Ассистент и генераторы скилов/схем идут на хосте.
 
 ## Запуск
 
@@ -48,7 +62,7 @@
 
 ## Плагины (этап 2)
 
-Отдельные исполняемые файлы в `…/AgentDesk/plugins/<name>/` с манифестом, протокол JSON-RPC через stdio. Возможности: `taskSource` (импорт задач), `trigger`, `notifier`. Секреты плагинов — Keychain.
+Отдельные исполняемые файлы в `…/Claudist/plugins/<name>/` с манифестом, протокол JSON-RPC через stdio. Возможности: `taskSource` (импорт задач), `trigger`, `notifier`. Секреты плагинов — Keychain.
 
 ## Этапы
 
