@@ -98,7 +98,7 @@ struct AssistantToolsTests {
         let projects = try call("list_projects")
         #expect(projects.array?.first { $0["name"]?.string == "Home" }?["sections"]?.array?.first?.string == "Doing")
         #expect(projects.array?.first { $0["name"]?.string == "Home" }?["parent"]?.string == "Work")
-        #expect(try call("list_filters")["filters"]?.array?.first?["query"]?.string == "p1 | overdue")
+        #expect(try call("list_filters")["filters"]?.array?.first { $0["name"]?.string == "Urgent" }?["query"]?.string == "p1 | overdue")
         let overview = try call("overview")
         #expect(overview["open_tasks"]?.number == 1)
         #expect(overview["secrets"]?.number == 1)

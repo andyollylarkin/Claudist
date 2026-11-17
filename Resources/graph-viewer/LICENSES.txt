@@ -1,0 +1,8 @@
+Third-party libraries bundled with the Claudist code graph viewer (all MIT licensed):
+
+- graphology 0.25.4 — https://github.com/graphology/graphology — Copyright (c) 2016-2021 Guillaume Plique
+- graphology-library 0.8.0 — https://github.com/graphology/graphology — Copyright (c) 2016-2021 Guillaume Plique
+- sigma 2.4.0 — https://github.com/jacomyal/sigma.js — Copyright (c) 2013-2022, Alexis Jacomy, Guillaume Plique, Benoît Simard
+
+The graphs themselves are extracted by graphify (Apache-2.0, https://github.com/Graphify-Labs/graphify),
+installed by Claudist into its own environment on first use.

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code graph</title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: rgba(255,255,255,.94); --text: #1f2328; --muted: #6b7178; --faint: #a3a8ae;
+  --border: rgba(0,0,0,.09); --hover: rgba(0,0,0,.05); --accent: #d9622b; --accent-soft: rgba(217,98,43,.12);
+  --edge: #dcdee1; --edge-hi: #e58a5e; --dim: #e4e5e7;
+  --changed: #e5484d; --affected: #e39b16; --external: #b4b8bd; --shadow: 0 4px 18px rgba(0,0,0,.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e; --panel: rgba(40,40,43,.95); --text: #ececed; --muted: #a0a3a8; --faint: #6c7076;
+    --border: rgba(255,255,255,.1); --hover: rgba(255,255,255,.07); --accent: #f0804a; --accent-soft: rgba(240,128,74,.16);
+    --edge: #393b40; --edge-hi: #d9733f; --dim: #2f3034;
+    --changed: #ff6369; --affected: #f1b33a; --external: #64686e; --shadow: 0 4px 18px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+  font: 12px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+#graph { position: absolute; inset: 0; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.panel { position: absolute; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+
+#topbar { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; gap: 6px; align-items: flex-start; pointer-events: none; }
+#topbar > * { pointer-events: auto; }
+.group { display: flex; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--shadow); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); height: 28px; }
+.group button { height: 26px; min-width: 28px; padding: 0 7px; border-radius: 7px; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 4px; }
+.group button:hover { background: var(--hover); color: var(--text); }
+.group button.on { color: var(--accent); background: var(--accent-soft); }
+.group .sep { width: 1px; height: 16px; background: var(--border); }
+.spacer { flex: 1; }
+svg.i { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+#searchbox { position: relative; width: 230px; }
+#search { width: 100%; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel);
+  color: var(--text); padding: 0 9px 0 26px; font: inherit; outline: none; box-shadow: var(--shadow); -webkit-user-select: text; user-select: text; }
+#search:focus { border-color: var(--accent); }
+#searchbox svg { position: absolute; left: 8px; top: 7px; width: 13px; height: 13px; color: var(--faint); }
+#results { top: 32px; left: 0; right: 0; padding: 4px; display: none; max-height: 260px; overflow: auto; }
+#results.show { display: block; }
+.result { padding: 5px 7px; border-radius: 6px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
+.result:hover, .result.active { background: var(--accent-soft); }
+.result .file { color: var(--faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#legend { top: 44px; left: 8px; width: 236px; bottom: 30px; overflow: auto; padding: 10px; display: none; }
+body.legend #legend { display: block; }
+h4 { margin: 10px 0 5px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+h4:first-child { margin-top: 0; }
+.row { display: flex; align-items: center; gap: 7px; padding: 3px 5px; border-radius: 6px; cursor: pointer; }
+.row:hover { background: var(--hover); }
+.row.off { opacity: .4; }
+.row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .count { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 11px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.links { display: flex; gap: 8px; margin: 2px 0 4px 5px; }
+.links button { color: var(--accent); font-size: 11px; padding: 0; }
+
+#details { top: 44px; right: 8px; width: 290px; max-height: calc(100% - 82px); overflow: auto; padding: 12px; display: none; -webkit-user-select: text; user-select: text; }
+#details.show { display: block; }
+#details h3 { margin: 0 24px 2px 0; font-size: 14px; word-break: break-word; }
+#details .meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+#details .desc { font-size: 12px; line-height: 1.45; margin: 6px 0 8px; white-space: pre-wrap; }
+#details .close { position: absolute; top: 8px; right: 8px; color: var(--faint); width: 20px; height: 20px; border-radius: 5px; }
+#details .close:hover { background: var(--hover); color: var(--text); }
+a.file { color: var(--accent); text-decoration: none; cursor: pointer; word-break: break-all; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+a.file:hover { text-decoration: underline; }
+.actions { display: flex; flex-wrap: wrap; gap: 5px; margin: 9px 0 4px; }
+.actions button { border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; font-size: 11px; color: var(--text); }
+.actions button:hover { background: var(--hover); }
+.actions button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+.actions button.on { color: var(--accent); border-color: var(--accent); }
+.conn { padding: 3px 5px; border-radius: 5px; cursor: pointer; display: flex; gap: 6px; align-items: center; }
+.conn:hover { background: var(--hover); }
+.conn .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn .tag { font-size: 9.5px; color: var(--faint); }
+
+#status { position: absolute; left: 8px; right: 8px; bottom: 6px; display: flex; gap: 10px; color: var(--muted); font-size: 11px; pointer-events: none; }
+#status .hint { margin-left: auto; color: var(--faint); }
+#banner { position: absolute; left: 50%; top: 44px; transform: translateX(-50%); padding: 6px 12px; display: none; color: var(--text); }
+#banner.show { display: block; }
+#banner button { color: var(--accent); margin-left: 8px; }
+#loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); pointer-events: none; }
+#loading.hide { display: none; }
+#error { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--changed); padding: 20px; text-align: center; }
+body.inline #legend { bottom: 28px; width: 210px; }
+body.inline #details { width: 260px; }
+body.inline #searchbox { width: 190px; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<div id="topbar">
+  <div class="group">
+    <button id="b-legend" title="Subsystems and filters"><svg class="i" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h8"/></svg></button>
+  </div>
+  <div id="searchbox">
+    <svg viewBox="0 0 16 16" class="i"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+    <input id="search" placeholder="Find a node…" autocomplete="off" spellcheck="false">
+    <div id="results" class="panel"></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="group">
+    <button id="b-out" title="Zoom out"><svg class="i" viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
+    <button id="b-in" title="Zoom in"><svg class="i" viewBox="0 0 16 16"><path d="M3 8h10M8 3v10"/></svg></button>
+    <button id="b-fit" title="Fit"><svg class="i" viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
+    <span class="sep"></span>
+    <button id="b-layout" title="Lay out again"><svg class="i" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg></button>
+    <button id="b-whole" title="Whole graph of this folder, rebuilt now"><svg class="i" viewBox="0 0 16 16"><circle cx="4" cy="4" r="1.6"/><circle cx="12" cy="5" r="1.6"/><circle cx="7" cy="12" r="1.6"/><path d="M5.4 4.3 10.4 4.8M11.2 6.4 7.8 10.6M4.6 5.5l1.8 5"/></svg></button>
+    <button id="b-expand" title="Open large"><svg class="i" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/></svg></button>
+  </div>
+</div>
+<div id="legend" class="panel"></div>
+<div id="details" class="panel"></div>
+<div id="banner" class="panel"></div>
+<div id="status"><span id="stats"></span><span class="hint" id="hint"></span></div>
+<div id="loading">Loading graph…</div>
+<div id="error"></div>
+<script src="graphology.umd.min.js"></script>
+<script src="graphology-library.min.js"></script>
+<script src="sigma.min.js"></script>
+<script src="viewer.js"></script>
+</body>
+</html>

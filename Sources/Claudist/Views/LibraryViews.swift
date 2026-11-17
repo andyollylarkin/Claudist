@@ -157,7 +157,15 @@ struct SettingsView: View {
             }
             if let error { Text(error).font(.system(size: 11)).foregroundStyle(Theme.red) }
 
+            AccountsSettings()
+
+            TaskLockSettings()
+
             IsolationSettings()
+
+            TranscriptionSettings()
+
+            CodeGraphSettings()
 
             Card(title: "Finder", footer: "Agent folders keep settings and skills in .claude/. This switches Finder's global setting and restarts Finder. ⌘⇧. toggles it once in any Finder window.") {
                 FieldRow(title: "Show hidden files in Finder", last: true) {

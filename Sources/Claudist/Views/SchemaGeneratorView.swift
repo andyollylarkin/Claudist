@@ -80,7 +80,7 @@ final class SchemaGeneration: ObservableObject {
         let process = AgentProcess(executable: try ClaudeCLI.executable(),
                                    arguments: SchemaGenerator.arguments(options),
                                    cwd: FileManager.default.temporaryDirectory,
-                                   environment: ClaudeCLI.environment()) { [weak self] event in
+                                   environment: ClaudeAccounts.defaultHostEnvironment()) { [weak self] event in
             DispatchQueue.main.async { self?.handle(event) }
         }
         self.process = process

@@ -266,11 +266,17 @@ struct TaskRow: View {
             PriorityCheckbox(task: task)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                Text(task.content)
-                    .font(.system(size: 14))
-                    .foregroundStyle(task.isCompleted ? Theme.tertiary : Theme.text)
-                    .strikethrough(task.isCompleted, color: Theme.tertiary)
-                if !task.description.isEmpty {
+                HStack(spacing: 5) {
+                    if task.isLocked {
+                        Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(Theme.tertiary).help("Locked task")
+                    }
+                    Text(task.content)
+                        .font(.system(size: 14))
+                        .foregroundStyle(task.isCompleted ? Theme.tertiary : Theme.text)
+                        .strikethrough(task.isCompleted, color: Theme.tertiary)
+                }
+                // Locked tasks never preview their text in lists, open or not.
+                if !task.description.isEmpty, !task.isLocked {
                     MarkdownPreview(text: task.description, lines: 2)
                 }
                 if !TaskMeta.isEmpty(task, decor) {
@@ -278,6 +284,9 @@ struct TaskRow: View {
                 }
             }
             Spacer(minLength: 8)
+            if task.isFlagged || hovering {
+                FlagButton(task: task)
+            }
             if hovering, task.agentId != nil {
                 IconButton(icon: runs.live[task.id] == nil ? "play.fill" : "stop.fill",
                            help: runs.live[task.id] == nil ? "Run agent" : "Stop agent") {
@@ -324,14 +333,20 @@ struct TaskCard: View {
             HStack(alignment: .top, spacing: 8) {
                 PriorityCheckbox(task: task, size: 16)
                     .padding(.top, 1)
+                if task.isLocked {
+                    Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(Theme.tertiary).padding(.top, 3)
+                }
                 Text(task.content)
                     .font(.system(size: 13))
                     .foregroundStyle(task.isCompleted ? Theme.tertiary : Theme.text)
                     .strikethrough(task.isCompleted, color: Theme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
+                if task.isFlagged || hovering {
+                    FlagButton(task: task, size: 11)
+                }
             }
-            if !task.description.isEmpty {
+            if !task.description.isEmpty, !task.isLocked {
                 MarkdownPreview(text: task.description, lines: 3)
                     .padding(.leading, 24)
             }
@@ -366,6 +381,33 @@ struct TaskCard: View {
     }
 }
 
+/// Flag toggle: filled orange when flagged, an outline to flag otherwise.
+struct FlagButton: View {
+    @EnvironmentObject var store: AppStore
+    let task: TaskItem
+    var size: CGFloat = 12
+
+    var body: some View {
+        Button { Self.toggle(task, store: store) } label: {
+            Image(systemName: task.isFlagged ? "flag.fill" : "flag")
+                .font(.system(size: size))
+                .foregroundStyle(task.isFlagged ? Color.orange : Theme.tertiary)
+                .frame(width: size + 10, height: size + 10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(task.isFlagged ? "Remove flag" : "Flag")
+    }
+
+    /// Changes only the flag, so a stale copy of the task can't overwrite other edits.
+    static func toggle(_ task: TaskItem, store: AppStore) {
+        let flagged = !task.isFlagged
+        store.write { db in
+            _ = try TaskItem.filter(key: task.id).updateAll(db, Column("isFlagged").set(to: flagged))
+        }
+    }
+}
+
 struct DragPreview: View {
     let title: String
     var body: some View {
@@ -393,6 +435,13 @@ struct TaskContextMenu: View {
             Divider()
         }
         Button("Open task") { store.selectedTaskId = task.id }
+        Button("Open Full Screen") { store.selectedTaskId = task.id; store.taskExpanded = true }
+        Button(task.isFlagged ? "Remove Flag" : "Flag") { FlagButton.toggle(task, store: store) }
+        if task.isLocked {
+            Button("Remove Lock…") { store.removeLock(task) }
+        } else {
+            Button("Lock with Password…") { store.lockTask(task) }
+        }
         Menu("Priority") {
             ForEach(1...4, id: \.self) { p in
                 Button("Priority \(p)") { var t = task; t.priority = p; store.write { try t.update($0) } }

@@ -87,6 +87,7 @@ struct FilterSQLCompiler {
         case .noTime: return "(t.dueDate IS NOT NULL AND t.dueTime IS NULL)"
         case .noDeadline: return "t.deadline IS NULL"
         case .recurring: return "(t.isRecurring = 1 AND t.dueDate IS NOT NULL)"
+        case .flagged: return "t.isFlagged = 1"
         case .needsYou: return Attention.sqlCondition
         case .subtask: return "t.parentId IS NOT NULL"
         case .shared: return "0"

@@ -169,6 +169,12 @@ struct AgentEditor: View {
                 }
 
                 Card(title: "Runtime") {
+                    FieldRow(title: "Claude account", subtitle: "Which Claude this agent's runs use") {
+                        let options = [("", "Default (\(store.defaultAccountName))"), (ClaudeAccounts.macLogin, "This Mac's login")]
+                            + store.claudeAccounts.map { ($0.id, $0.name) }
+                        InlineMenu(value: options.first { $0.0 == (agent.accountId ?? "") }?.1 ?? "Default (\(store.defaultAccountName))",
+                                   options: options) { agent.accountId = $0.isEmpty ? nil : $0 }
+                    }
                     FieldRow(title: "Model") {
                         InlineMenu(value: Self.models.first { $0.0 == (agent.model ?? "") }?.1 ?? (agent.model ?? "Default"),
                                    options: Self.models) { agent.model = $0.isEmpty ? nil : $0 }
@@ -274,9 +280,13 @@ struct AgentEditor: View {
 
                 AgentIntegrationsCard(agentId: agent.id)
 
-                let others = store.agents.filter { $0.id != agent.id }
+                // Only agents on the same Claude account: accounts don't reach into each other.
+                let scope = store.read { try ClaudeAccounts.scope($0, agent: agent) }
+                let others = store.agents.filter { other in
+                    other.id != agent.id && (store.read { try ClaudeAccounts.scope($0, agent: other) }) == scope
+                }
                 Card(title: "Can call agents",
-                     footer: "Selected agents become sub-agents: this agent can hand them work through the delegate tool. Each call creates a sub-task that runs in the called agent's own folder, with its own memory, skills and secrets, and its answer comes back to this agent.") {
+                     footer: "Selected agents become sub-agents: this agent can hand them work through the delegate tool. Each call creates a sub-task that runs in the called agent's own folder, with its own memory, skills and secrets, and its answer comes back to this agent. Agents on another Claude account aren't listed: accounts are kept apart.") {
                     if others.isEmpty {
                         CardEmpty(text: "Add more agents to let this one call them")
                     }

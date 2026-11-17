@@ -27,10 +27,13 @@ struct TaskDetailView: View {
                     topBar(task)
                     Divider()
                     header(task)
-                    UnderlineTabs(titles: tabTitles(task), selection: $tab)
-                        .padding(.horizontal, 20)
                     let titles = tabTitles(task)
                     let current = titles.indices.contains(tab) ? titles[tab] : titles[0]
+                    if task.isSealed {
+                        ScrollView { LockedTaskPanel() }
+                    } else {
+                    UnderlineTabs(titles: tabTitles(task), selection: $tab)
+                        .padding(.horizontal, 20)
                     if current.hasPrefix("Details") {
                         ScrollView { details(task).padding(20) }
                     } else if current.hasPrefix("Agent") {
@@ -40,13 +43,19 @@ struct TaskDetailView: View {
                     } else {
                         AuditView(task: task)
                     }
+                    }
                 }
+                // Full screen keeps the text at a readable width.
+                .frame(maxWidth: store.taskExpanded ? 1100 : .infinity)
+                .frame(maxWidth: .infinity)
                 .background(Theme.background)
             } else {
                 ContentUnavailableView("Task deleted", systemImage: "trash")
             }
         }
         .onAppear(perform: observe)
+        // Entering or closing the master password changes what the records decrypt to.
+        .onChange(of: store.vaultOpen) { _, _ in observe() }
         .onChange(of: store.agentTabTaskId) { _, _ in takeAgentTab() }
         // #task links in the conversation open that task.
         .environment(\.openURL, OpenURLAction { url in
@@ -94,9 +103,9 @@ struct TaskDetailView: View {
     }
 
     @AppStorage(Isolation.settingKey) private var isolationEngine = Isolation.defaultEngine
-    private var isolationOn: Bool { isolationEngine != Isolation.none }
-    private var isolationTitle: String {
-        Isolation.engine(isolationEngine, paths: store.paths, credentials: store.secretStore)?.title ?? isolationEngine
+    private var engines: [any IsolationEngine] { Isolation.engines(paths: store.paths, credentials: store.secretStore) }
+    private func engineTitle(_ id: String) -> String {
+        id == Isolation.none ? "On this Mac" : engines.first { $0.id == Isolation.current(id) }?.title ?? id
     }
 
     private func update(_ change: (inout TaskItem) -> Void) {
@@ -123,6 +132,18 @@ struct TaskDetailView: View {
                     .buttonStyle(.plain).lineLimit(1)
             }
             Spacer()
+            if task.isLocked {
+                IconButton(icon: task.isSealed ? "lock.fill" : "lock.open", help: task.isSealed ? "Unlock" : "Locked task — click to remove the lock") {
+                    if task.isSealed { store.withVault {} } else { store.removeLock(task) }
+                }
+            } else {
+                IconButton(icon: "lock", help: "Lock with the master password") { store.lockTask(task) }
+            }
+            FlagButton(task: task, size: 13)
+            IconButton(icon: store.taskExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                       help: store.taskExpanded ? "Back to side panel (⌘⇧↩)" : "Open full screen (⌘⇧↩)") {
+                store.taskExpanded.toggle()
+            }
             IconButton(icon: "trash", help: "Delete task") {
                 store.selectedTaskId = nil
                 store.write { _ = try task.delete($0) }
@@ -145,8 +166,12 @@ struct TaskDetailView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Theme.text)
                     .onChange(of: content) { _, v in if !v.isEmpty { update { $0.content = v } } }
-                DescriptionField(text: $details)
-                    .onChange(of: details) { _, v in update { $0.description = v } }
+                if !task.isSealed {
+                    DescriptionField(text: $details)
+                        .onChange(of: details) { _, v in
+                            if v != observed.value?.description { update { $0.description = v } }
+                        }
+                }
             }
         }
         .padding(.horizontal, 20)
@@ -257,14 +282,22 @@ struct TaskDetailView: View {
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 }
-                if task.agentId != nil && (isolationOn || task.runOnHost) {
-                    PropertyRow(icon: task.runOnHost ? "desktopcomputer" : "shippingbox", title: "Runs") {
+                if task.agentId != nil {
+                    let current = Isolation.engineId(for: task)
+                    PropertyRow(icon: current == Isolation.none ? "desktopcomputer" : "shippingbox", title: "Runs") {
                         Menu {
-                            Button("In isolation (\(isolationTitle))") { update { $0.runOnHost = false } }
-                            Button("On this Mac — full access of your user") { update { $0.runOnHost = true } }
+                            Button("Default — \(engineTitle(isolationEngine))") {
+                                update { $0.runOnHost = false; $0.isolation = nil }
+                            }
+                            Divider()
+                            ForEach(engines, id: \.id) { engine in
+                                Button("In \(engine.title)") { update { $0.runOnHost = false; $0.isolation = engine.id } }
+                            }
+                            Button("On this Mac — full access of your user") { update { $0.runOnHost = true; $0.isolation = nil } }
                         } label: {
-                            ValueLabel(text: task.runOnHost ? "On this Mac" : "In \(isolationTitle)",
-                                       color: task.runOnHost ? .orange : nil)
+                            ValueLabel(text: current == Isolation.none ? "On this Mac" : "In \(engineTitle(current))",
+                                       color: current == Isolation.none ? .orange : nil,
+                                       muted: task.isolation == nil && !task.runOnHost)
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .help("For tasks about this Mac itself (disk, apps, system settings). The agent then sees everything your user can.")
@@ -360,6 +393,7 @@ struct TaskDetailView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .lineLimit(1...6)
+                    .shiftReturnInsertsNewline()
                     .onSubmit { addComment(task) }
                 Button { addComment(task) } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 20))
@@ -376,7 +410,7 @@ struct TaskDetailView: View {
     private func addComment(_ task: TaskItem) {
         let c = newComment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !c.isEmpty else { return }
-        store.write { try Comment(taskId: task.id, content: c).insert($0) }
+        store.write { try Comment.make($0, taskId: task.id, content: c).insert($0) }
         newComment = ""
     }
 

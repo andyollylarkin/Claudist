@@ -22,9 +22,13 @@ public struct AppPaths: Sendable {
     public var databases: URL { root.appendingPathComponent("databases", isDirectory: true) }
     /// Working folder of the built-in assistant.
     public var assistant: URL { root.appendingPathComponent("assistant", isDirectory: true) }
+    /// Apps made in the App Builder: one folder per app.
+    public var apps: URL { root.appendingPathComponent("apps", isDirectory: true) }
+    /// Code graphs (experimental): the graph engine, graphs of folders, and views shown in chats.
+    public var graphs: URL { root.appendingPathComponent("graphs", isDirectory: true) }
 
     public func ensure() throws {
-        for dir in [root, skills, agents, plugins, databases, assistant] {
+        for dir in [root, skills, agents, plugins, databases, assistant, apps] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }

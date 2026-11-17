@@ -3,18 +3,39 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var graphs = CodeGraphHost.shared
 
     var body: some View {
+        if let id = store.expandedAppId, let app = store.miniApp(id) {
+            ExpandedMiniAppView(app: app)
+        } else {
+            main
+                .sheet(isPresented: $store.showingNewApp) { NewAppWizard() }
+                .sheet(item: $store.vaultPrompt) { VaultSheet(prompt: $0) }
+                .sheet(item: $graphs.expanded) { graph in
+                    ExpandedGraphSheet(graph: graph)
+                        .environment(\.composerInsert, graphs.askHandlers[graph.id])
+                }
+        }
+    }
+
+    private var main: some View {
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } detail: {
-            detail
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                if store.taskExpanded, let id = store.selectedTaskId {
+                    TaskDetailView(taskId: id).id(id)
+                } else {
+                    detail
+                }
+            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(Theme.background)
                 .inspector(isPresented: Binding(
-                    get: { store.selectedTaskId != nil },
-                    set: { if !$0 { store.selectedTaskId = nil } })) {
+                    get: { store.selectedTaskId != nil && !store.taskExpanded },
+                    set: { if !$0 && !store.taskExpanded { store.selectedTaskId = nil } })) {
                     if let id = store.selectedTaskId {
                         TaskDetailView(taskId: id)
                             .id(id)
@@ -79,10 +100,22 @@ struct ContentView: View {
             StatsView()
         case .integrations:
             IntegrationsView()
+        case .recordings:
+            RecordingsView()
         case .review:
             ReviewView()
         case .failed:
             FailedView()
+        case .search:
+            SearchView()
+        case .apps:
+            AppsGalleryView()
+        case .appBuilder:
+            AppBuilderView()
+        case .miniApp(let id):
+            if let app = store.miniApp(id) {
+                MiniAppScreen(app: app)
+            }
         case nil:
             ContentUnavailableView("Pick a project or a filter", systemImage: "sidebar.left")
         }

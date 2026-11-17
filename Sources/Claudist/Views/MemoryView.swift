@@ -151,6 +151,13 @@ struct MemoryView: View {
                         Button("Edit") { draft = text; editing = true }.buttonStyle(AccentButtonStyle(prominent: false))
                         Menu {
                             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file.url]) }
+                            if file.kind == .memory && file.name != "MEMORY.md", let agent {
+                                Menu("Move to Agent") {
+                                    ForEach(store.agents.filter { $0.folderPath != agent.folderPath }) { other in
+                                        Button(other.name) { move(file, to: other) }
+                                    }
+                                }
+                            }
                             Divider()
                             Button("Forget (move to Trash)", role: .destructive) { forget(file) }
                         } label: {
@@ -218,6 +225,16 @@ struct MemoryView: View {
             try Data(draft.utf8).write(to: file.url, options: .atomic)
             editing = false
             error = nil
+            reload()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func move(_ file: AgentMemory.File, to other: Agent) {
+        do {
+            try AgentMemory.move(file, toAgentFolder: other.folderPath, paths: store.paths,
+                                 environment: ProcessInfo.processInfo.environment)
+            error = nil
+            fileId = nil
             reload()
         } catch { self.error = error.localizedDescription }
     }

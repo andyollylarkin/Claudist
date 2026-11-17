@@ -128,6 +128,7 @@ struct AuditView: View {
                         Pill(text: a.agent, icon: "person.crop.circle", color: Theme.accent)
                         Pill(text: a.isolation, icon: a.isolation == "On this Mac" ? "laptopcomputer" : "shippingbox",
                              color: a.isolation == "On this Mac" ? Theme.orange : Theme.green)
+                        if let account = a.account { Pill(text: account, icon: "person.badge.key", color: Theme.purple) }
                     }
                     accessRow("folder", "Folder", [a.folder])
                     accessRow("key", "Secrets", a.secrets.map { $0.name + ($0.access == "file" ? " (file)" : "") })

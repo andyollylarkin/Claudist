@@ -36,6 +36,8 @@ struct FilterView: View {
                 GroupedListView(columns: columns, decor: decor.value, showProject: true)
             }
         }
+        // Empty content must not let the header float to the middle.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("")
         .sheet(isPresented: $editing) { FilterEditor(filter: filter) }
         .onAppear(perform: observe)

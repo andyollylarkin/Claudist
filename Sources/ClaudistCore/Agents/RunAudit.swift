@@ -15,6 +15,8 @@ public struct RunAccess: Codable, Sendable, Hashable {
     public var folder: String
     /// "Docker", "On this Mac" …
     public var isolation: String
+    /// The Claude account the run signed in with (older runs: nil).
+    public var account: String?
     public var secrets: [Item] = []
     public var storages: [Item] = []
     public var databases: [Item] = []

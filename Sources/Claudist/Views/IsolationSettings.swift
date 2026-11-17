@@ -14,6 +14,8 @@ struct IsolationSettings: View {
 
     private var engines: [any IsolationEngine] { Isolation.engines(paths: store.paths, credentials: store.secretStore) }
     private var engine: (any IsolationEngine)? { engines.first { $0.id == engineId } }
+    /// The engine that keeps what agents install.
+    private var isWorkbench: Bool { Isolation.current(engineId) == DockerConnectedEngine.engineId }
 
     var body: some View {
         Card(title: "Isolation",
@@ -38,7 +40,19 @@ struct IsolationSettings: View {
                     }
                 }
             }
-            if engineId == DockerEngine.engineId {
+            if isWorkbench {
+                FieldRow(title: "Host network",
+                         subtitle: DockerConnectedEngine.desktopHostNetworking() == false
+                            ? "Docker Desktop keeps containers on its own network: the internet works, but localhost isn't the Mac's. Turn on Docker Desktop → Settings → Resources → Network → Enable host networking."
+                            : "Containers share the Mac's network.") {
+                    EmptyView()
+                }
+                FieldRow(title: "Installed software",
+                         subtitle: "Everything agents installed lives here. Reset throws it away; the next run starts clean.") {
+                    Button("Reset…") { resetWorkbench() }.buttonStyle(AccentButtonStyle(prominent: false)).disabled(building)
+                }
+            }
+            if engineId == DockerEngine.engineId || isWorkbench {
                 FieldRow(title: "Subscription token",
                          subtitle: "Containers can't use this Mac's login. Run `claude setup-token` (valid for a year) and paste the token here; it is stored in the Keychain.") {
                     VStack(alignment: .trailing, spacing: 6) {
@@ -60,7 +74,10 @@ struct IsolationSettings: View {
                         }
                     }
                 }
-                FieldRow(title: "Agent image", subtitle: "Debian with Node, Claude Code, git, Python, ripgrep, sqlite3. Built once per Claude Code version.",
+                FieldRow(title: isWorkbench ? "Workbench" : "Agent image",
+                         subtitle: isWorkbench
+                            ? "Debian with Node, Claude Code, build tools, Python and sudo. Created once; Claude Code is updated in place."
+                            : "Debian with Node, Claude Code, git, Python, ripgrep, sqlite3. Built once per Claude Code version.",
                          last: log.isEmpty) {
                     HStack(spacing: 6) {
                         if building { ProgressView().controlSize(.small) }
@@ -121,26 +138,23 @@ struct IsolationSettings: View {
         refresh()
     }
 
-    /// Opens Terminal with `claude setup-token`: it needs a browser and prints the token.
-    private func openSetupToken() {
-        let script = store.paths.root.appendingPathComponent("containers/setup-token.command")
-        do {
-            try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let claude = (try? ClaudeCLI.executable().path) ?? "claude"
-            let text = """
-                #!/bin/zsh -l
-                echo "Sign in in the browser, then copy the token printed below into Claudist → Settings → Isolation."
-                echo
-                '\(claude.replacingOccurrences(of: "'", with: "'\\''"))' setup-token
-                echo
-                # Terminal may close the window as soon as the script ends; keep it open for copying.
-                read -s -k 1 "?Copy the token, then press any key to close this window…"
-                echo
-                """
-            try text.write(to: script, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
-            NSWorkspace.shared.open(script)
-        } catch { store.report(error) }
+    private func openSetupToken() { SetupToken.open(store) }
+
+    private func resetWorkbench() {
+        let alert = NSAlert()
+        alert.messageText = "Reset the workbench?"
+        alert.informativeText = "Everything agents installed in it is deleted. Files on your Mac and agents' memory stay."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let engine = DockerConnectedEngine(paths: store.paths, credentials: store.secretStore)
+        Task.detached {
+            let result = Result { try engine.reset() }
+            await MainActor.run {
+                if case .failure(let error) = result { store.report(error) }
+                refresh()
+            }
+        }
     }
 
     private func build() {
@@ -155,5 +169,29 @@ struct IsolationSettings: View {
                 refresh()
             }
         }
+    }
+}
+
+/// Terminal with `claude setup-token`: it needs a browser and prints a year-long token.
+enum SetupToken {
+    @MainActor static func open(_ store: AppStore) {
+        let script = store.paths.root.appendingPathComponent("containers/setup-token.command")
+        do {
+            try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let claude = (try? ClaudeCLI.executable().path) ?? "claude"
+            let text = """
+                #!/bin/zsh -l
+                echo "Sign in in the browser, then copy the token printed below into Claudist → Settings."
+                echo
+                '\(claude.replacingOccurrences(of: "'", with: "'\\''"))' setup-token
+                echo
+                # Terminal may close the window as soon as the script ends; keep it open for copying.
+                read -s -k 1 "?Copy the token, then press any key to close this window…"
+                echo
+                """
+            try text.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+            NSWorkspace.shared.open(script)
+        } catch { store.report(error) }
     }
 }

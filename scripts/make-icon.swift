@@ -1,4 +1,4 @@
-// Renders Resources/AppIcon-1024.png: terracotta squircle, cream task card with a check, agent spark.
+// Renders Resources/AppIcon-1024.png: indigo squircle (mindsw.io palette), lavender-white task card with a check, agent spark.
 // Usage: swift scripts/make-icon.swift <out.png>
 import AppKit
 
@@ -22,7 +22,7 @@ let tilePath = CGPath(roundedRect: tile, cornerWidth: 186, cornerHeight: 186, tr
 ctx.saveGState()
 ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 28, color: color(0x000000, 0.28).cgColor)
 ctx.addPath(tilePath)
-ctx.setFillColor(color(0xC96442).cgColor)
+ctx.setFillColor(color(0x5856C1).cgColor)
 ctx.fillPath()
 ctx.restoreGState()
 
@@ -31,7 +31,7 @@ ctx.saveGState()
 ctx.addPath(tilePath)
 ctx.clip()
 let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                          colors: [color(0xE08A68).cgColor, color(0xD97757).cgColor, color(0xBF5A38).cgColor] as CFArray,
+                          colors: [color(0x8A88D3).cgColor, color(0x6E6BD0).cgColor, color(0x4A48A8).cgColor] as CFArray,
                           locations: [0, 0.45, 1])!
 ctx.drawLinearGradient(gradient, start: CGPoint(x: tile.minX, y: tile.maxY), end: CGPoint(x: tile.maxX, y: tile.minY), options: [])
 // Soft top light, no hard edge.
@@ -46,14 +46,14 @@ ctx.saveGState()
 ctx.translateBy(x: 488, y: 470)
 ctx.rotate(by: -0.07)
 let card = CGRect(x: -235, y: -225, width: 470, height: 450)
-ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: color(0x6B2A14, 0.35).cgColor)
+ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: color(0x1D1B27, 0.35).cgColor)
 ctx.addPath(CGPath(roundedRect: card, cornerWidth: 72, cornerHeight: 72, transform: nil))
-ctx.setFillColor(color(0xF5F0E6).cgColor)
+ctx.setFillColor(color(0xF4F4FF).cgColor)
 ctx.fillPath()
 ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
 // Faint text lines on the card.
-ctx.setFillColor(color(0xE3D9C8).cgColor)
+ctx.setFillColor(color(0xE3E3FF).cgColor)
 for (y, w) in [(130.0, 300.0), (80.0, 210.0)] {
     ctx.addPath(CGPath(roundedRect: CGRect(x: -165, y: y, width: w, height: 26), cornerWidth: 13, cornerHeight: 13, transform: nil))
     ctx.fillPath()
@@ -65,7 +65,7 @@ check.move(to: CGPoint(x: -140, y: -40))
 check.addLine(to: CGPoint(x: -45, y: -130))
 check.addLine(to: CGPoint(x: 140, y: 40))
 ctx.addPath(check)
-ctx.setStrokeColor(color(0xC96442).cgColor)
+ctx.setStrokeColor(color(0x5856C1).cgColor)
 ctx.setLineWidth(62)
 ctx.setLineCap(.round)
 ctx.setLineJoin(.round)
@@ -75,15 +75,15 @@ ctx.restoreGState()
 // Agent spark: cream rays with rounded ends, uneven lengths for a hand-drawn feel.
 ctx.saveGState()
 let center = CGPoint(x: 748, y: 752)
-ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 14, color: color(0x6B2A14, 0.3).cgColor)
-ctx.setStrokeColor(color(0xFBF7F0).cgColor)
+ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 14, color: color(0x1D1B27, 0.3).cgColor)
+ctx.setStrokeColor(color(0xFBFBFF).cgColor)
 ctx.setLineCap(.round)
 // Tapered petals at uneven angles and lengths.
 let rays: [(angle: CGFloat, length: CGFloat, width: CGFloat)] = [
     (84, 104, 34), (127, 78, 28), (166, 94, 31), (208, 70, 26), (247, 90, 30),
     (290, 100, 32), (331, 76, 27), (12, 96, 32), (49, 74, 26),
 ]
-ctx.setFillColor(color(0xFBF7F0).cgColor)
+ctx.setFillColor(color(0xFBFBFF).cgColor)
 for ray in rays {
     let a = ray.angle * .pi / 180
     let tip = CGPoint(x: center.x + cos(a) * ray.length, y: center.y + sin(a) * ray.length)

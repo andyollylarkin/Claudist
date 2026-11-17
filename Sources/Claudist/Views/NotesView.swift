@@ -152,6 +152,15 @@ struct NotesView: View {
     init(paths: AppPaths) { _model = StateObject(wrappedValue: NotesModel(paths: paths)) }
 
     var body: some View {
+        content.onAppear {
+            if let path = store.noteToOpen {
+                model.open(path)
+                store.noteToOpen = nil
+            }
+        }
+    }
+
+    private var content: some View {
         HStack(spacing: 0) {
             list.frame(width: 260).frame(maxHeight: .infinity, alignment: .top)
             Divider()

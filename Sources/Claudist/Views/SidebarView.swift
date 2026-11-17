@@ -11,11 +11,18 @@ struct SidebarView: View {
     @State private var filtersCollapsed = false
     @State private var projectsCollapsed = false
     @State private var dashboardsCollapsed = false
+    @State private var appsCollapsed = false
+    @State private var editingApp: MiniApp?
+    @EnvironmentObject var builder: AppBuilderManager
+    @EnvironmentObject var appHost: MiniAppHost
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
                 header
+                SidebarSearchField()
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 8)
 
                 SidebarRow(title: "Assistant", icon: "sparkles", iconColor: Theme.accent,
                            selected: store.selection == .assistant) {
@@ -23,6 +30,7 @@ struct SidebarView: View {
                 }
                 SidebarRow(title: "Notes", icon: "note.text", iconColor: Color(hex: 0xB29104),
                            selected: store.selection == .notes) { store.selection = .notes }
+                RecordingsSidebarRow(service: store.transcription)
                 SidebarRow(title: "Needs you", icon: store.needsYouCount > 0 ? "hand.raised.fill" : "hand.raised",
                            iconColor: store.needsYouCount > 0 ? .orange : Theme.tertiary,
                            selected: store.selection == .needsYou,
@@ -107,6 +115,28 @@ struct SidebarView: View {
                     }
                 }
 
+                group("Apps", collapsed: $appsCollapsed, add: { store.showingNewApp = true }) {
+                    SidebarRow(title: "All apps", icon: "square.grid.2x2", iconColor: Theme.accent,
+                               selected: store.selection == .apps,
+                               count: store.miniApps.isEmpty ? nil : store.miniApps.count) { store.selection = .apps }
+                    SidebarRow(title: "Builder", icon: "hammer", iconColor: Theme.purple,
+                               selected: store.selection == .appBuilder,
+                               trailing: builder.live.values.contains(where: \.busy) ? AnyView(ProgressView().controlSize(.mini)) : nil) {
+                        store.selection = .appBuilder
+                    }
+                    ForEach(store.miniApps) { app in
+                        SidebarRow(title: app.displayName, icon: "", emoji: app.displayIcon, iconColor: Theme.accent,
+                                   selected: store.selection == .miniApp(app.id),
+                                   trailing: builder.isBuilding(app.id) ? AnyView(ProgressView().controlSize(.mini))
+                                       : appHost.runningIds.contains(app.id) ? AnyView(Circle().fill(Theme.green).frame(width: 6, height: 6)) : nil) {
+                            store.selection = .miniApp(app.id)
+                        }
+                        .contextMenu {
+                            MiniAppActions.menu(app, store: store, builder: builder, host: appHost) { editingApp = app }
+                        }
+                    }
+                }
+
                 group("Agents") {
                     SidebarRow(title: "Agents", icon: "person.2", iconColor: Theme.accent,
                                selected: store.selection == .agents,
@@ -161,6 +191,7 @@ struct SidebarView: View {
         .background(Theme.sidebar)
         .sheet(item: $editingProject) { ProjectEditor(project: $0) }
         .sheet(item: $editingFilter) { FilterEditor(filter: $0) }
+        .sheet(item: $editingApp) { AppSettingsSheet(app: $0) }
     }
 
     private var header: some View {
@@ -174,6 +205,7 @@ struct SidebarView: View {
                 Button("New project") { editingProject = Project(name: "") }
                 Button("New filter") { editingFilter = SavedFilter(name: "", query: "") }
                 Button("New dashboard") { addDashboard() }
+                Button("New app") { store.showingNewApp = true }
             } label: {
                 Image(systemName: "plus").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
             }
@@ -271,6 +303,8 @@ private struct SidebarGroupHeader: View {
 struct SidebarRow: View {
     let title: String
     let icon: String
+    /// Shown instead of the SF Symbol (apps).
+    var emoji: String? = nil
     var iconColor: Color = Theme.secondary
     var selected = false
     var count: Int?
@@ -281,7 +315,9 @@ struct SidebarRow: View {
     var body: some View {
         HoverRow(selected: selected) {
             HStack(spacing: 8) {
-                Image(systemName: icon)
+                Group {
+                    if let emoji { Text(emoji).font(.system(size: 13)) } else { Image(systemName: icon) }
+                }
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(iconColor)
                     .frame(width: 18)
@@ -415,5 +451,17 @@ private struct HelpLink: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// Turns red while a recording runs, wherever the user is in the app.
+private struct RecordingsSidebarRow: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject var service: TranscriptionService
+
+    var body: some View {
+        let on = service.recordingId != nil
+        SidebarRow(title: "Recordings", icon: on ? "record.circle.fill" : "waveform", iconColor: on ? Theme.red : Theme.purple,
+                   selected: store.selection == .recordings) { store.selection = .recordings }
     }
 }

@@ -13,7 +13,8 @@ final class UsageMonitor: ObservableObject {
     private var cancellable: AnyDatabaseCancellable?
 
     init(db: AppDatabase) {
-        cancellable = ValueObservation.tracking { try UsageLimits.latest($0) }
+        // The default account's limits: the one the assistant and most agents use.
+        cancellable = ValueObservation.tracking { try UsageLimits.latest($0, accountId: ClaudeAccounts.defaultId) }
             .removeDuplicates()
             .start(in: db.writer, scheduling: .immediate, onError: { _ in }) { [weak self] value in
                 self?.fromRuns = value
@@ -27,7 +28,7 @@ final class UsageMonitor: ObservableObject {
         checking = true
         error = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try UsageLimits.probe() }
+            let result = Result { try UsageLimits.probe(environment: ClaudeAccounts.defaultAccountEnvironment()) }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.checking = false

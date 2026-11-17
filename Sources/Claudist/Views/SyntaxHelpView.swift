@@ -98,6 +98,7 @@ struct SyntaxHelpView: View {
             ("deadline: today · no deadline", "By deadline (also deadline before:/after:)"),
             ("created: -7 days", "Created in the last 7 days (also created before:/after:)"),
             ("recurring", "Recurring tasks"),
+            ("flagged", "Tasks you flagged"),
         ]),
         Section(title: "Projects, sections, labels", rows: [
             ("#Work", "Tasks in the project Work"),

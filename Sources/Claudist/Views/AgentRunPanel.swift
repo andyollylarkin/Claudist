@@ -44,6 +44,7 @@ struct AgentRunPanel: View {
                         if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
+                .environment(\.composerInsert) { text in insertIntoMessage(text) }
             }
             if let liveRun {
                 PendingPermissions(liveRun: liveRun, taskId: task.id)
@@ -85,6 +86,11 @@ struct AgentRunPanel: View {
                 SELECT e.* FROM runEvent e JOIN run r ON r.id = e.runId WHERE r.taskId = ? ORDER BY e.seq
                 """, arguments: [id])
         }
+    }
+
+    /// A graph node the user asked about, put into the message.
+    private func insertIntoMessage(_ text: String) {
+        message = message.isEmpty || message.hasSuffix(" ") || message.hasSuffix("\n") ? message + text : message + " " + text
     }
 
     private func send() {
@@ -243,15 +249,11 @@ struct AgentRunPanel: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .lineLimit(1...8)
-                    .onSubmit(send)
-                    .onChange(of: message) { _, v in suggest(v) }
-                    .onKeyPress(.return, phases: .down) { press in
-                        if !suggestions.isEmpty {
-                            pick(suggestions[min(highlighted, suggestions.count - 1)])
-                            return .handled
-                        }
-                        return press.modifiers.contains(.shift) ? Self.insertNewline() : .ignored
+                    .shiftReturnInsertsNewline()
+                    .onSubmit {
+                        if suggestions.isEmpty { send() } else { pick(suggestions[min(highlighted, suggestions.count - 1)]) }
                     }
+                    .onChange(of: message) { _, v in suggest(v) }
                     .onKeyPress(.tab) {
                         guard !suggestions.isEmpty else { return .ignored }
                         pick(suggestions[min(highlighted, suggestions.count - 1)])
@@ -294,12 +296,6 @@ struct AgentRunPanel: View {
             }
             return true
         }
-    }
-
-    /// Shift-Return: a line break at the cursor instead of sending.
-    static func insertNewline() -> KeyPress.Result {
-        NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
-        return .handled
     }
 
     private var canSend: Bool {
@@ -382,6 +378,7 @@ struct TranscriptItem: Identifiable {
         case permission(tool: String, answer: String?)
         case ask(question: String, options: [String])
         case delegate(agent: String, title: String, taskId: ID)
+        case graph(CodeGraphRef)
         case result(String, isError: Bool)
         case error(String)
     }
@@ -434,6 +431,8 @@ struct TranscriptItem: Identifiable {
                 case "delegate":
                     out.append(TranscriptItem(id: base, kind: .delegate(
                         agent: v["agent"]?.string ?? "?", title: v["title"]?.string ?? "", taskId: v["taskId"]?.string ?? "")))
+                case "graph":
+                    if let ref = CodeGraphRef(v) { out.append(TranscriptItem(id: base, kind: .graph(ref))) }
                 case let k where k.hasPrefix("result"):
                     let isError = k != "result/success" || v["is_error"]?.bool == true
                     var parts: [String] = []
@@ -483,6 +482,9 @@ struct TranscriptRow: View {
                     Image(systemName: run.trigger == "schedule" ? "clock.arrow.circlepath" : run.trigger == "agent" ? "arrow.triangle.branch" : "play.circle")
                     Text("\(run.trigger == "schedule" ? "Scheduled run" : run.trigger == "agent" ? "Called by agent" : "Run") · \(run.startedAt)")
                     Text("· \(run.status.title)").foregroundStyle(run.status.color)
+                    if let account = run.accountId, let name = store.claudeAccounts.first(where: { $0.id == account })?.name {
+                        Text("· \(name)")
+                    }
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.tertiary)
@@ -569,6 +571,8 @@ struct TranscriptRow: View {
             }
             .buttonStyle(.plain)
             .padding(.leading, 30)
+        case .graph(let ref):
+            CodeGraphWidget(ref: ref)
         case .result(let text, let isError):
             SwiftUI.Label(text, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 11, weight: .medium)).foregroundStyle(isError ? Theme.red : Theme.green)
@@ -578,4 +582,36 @@ struct TranscriptRow: View {
                 .padding(.leading, 30)
         }
     }
+}
+
+/// Shift-Return puts a line break at the cursor instead of submitting. The text field's editor
+/// handles Return before SwiftUI's key handlers see it, so the key is caught on its way to the window.
+struct ShiftReturnNewline: ViewModifier {
+    final class Box { var focused = false; var monitor: Any? }
+    @FocusState private var focused: Bool
+    @State private var box = Box()
+
+    func body(content: Content) -> some View {
+        content
+            .focused($focused)
+            .onChange(of: focused) { _, v in box.focused = v }
+            .onAppear {
+                let box = box
+                box.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    guard box.focused, event.keyCode == 36 || event.keyCode == 76,
+                          event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift,
+                          let editor = event.window?.firstResponder as? NSTextView else { return event }
+                    editor.insertNewlineIgnoringFieldEditor(nil)
+                    return nil
+                }
+            }
+            .onDisappear {
+                if let m = box.monitor { NSEvent.removeMonitor(m) }
+                box.monitor = nil
+            }
+    }
+}
+
+extension View {
+    func shiftReturnInsertsNewline() -> some View { modifier(ShiftReturnNewline()) }
 }

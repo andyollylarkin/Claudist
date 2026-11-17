@@ -70,7 +70,7 @@ public enum TaskReferences {
         if let agent { head += ", agent \(agent)" }
         head += task.isCompleted ? ", completed)" : ", open)"
         var lines = [head]
-        if !task.description.isEmpty { lines.append("  Description: " + clip(task.description, 800)) }
+        if !task.description.isEmpty { lines.append("  Description: " + (task.isSealed ? TaskVault.hiddenText : clip(task.description, 800))) }
         let result = try String.fetchOne(db, sql: """
             SELECT e.json FROM runEvent e JOIN run r ON r.id = e.runId
              WHERE r.taskId = ? AND e.kind LIKE 'result%' ORDER BY r.startedAt DESC, e.seq DESC LIMIT 1

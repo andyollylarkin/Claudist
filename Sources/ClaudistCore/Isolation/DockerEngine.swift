@@ -48,9 +48,6 @@ public struct DockerEngine: IsolationEngine {
         guard let info = try? run(docker, ["info", "--format", "{{.ServerVersion}}"]), info.status == 0 else {
             return .unavailable("Docker is installed but not running. Start Docker Desktop.")
         }
-        guard (try? credentials.value(for: Self.tokenSecretId)) ?? nil != nil else {
-            return .unavailable("No Claude subscription token for containers. Add it in Settings → Isolation.")
-        }
         guard imageExists(docker) else {
             return .needsPreparation("The agent image \(image) will be built on first use (a few minutes).")
         }
@@ -96,9 +93,7 @@ public struct DockerEngine: IsolationEngine {
 
     public func wrap(_ spec: LaunchSpec) throws -> LaunchSpec {
         guard let docker = Self.dockerExecutable() else { throw ClaudistError.invalid("Docker is not installed") }
-        guard let token = try credentials.value(for: Self.tokenSecretId).map(Self.cleanToken), !token.isEmpty else {
-            throw ClaudistError.invalid("No Claude subscription token for containers. Add it in Settings → Isolation.")
-        }
+        let credential = try Self.credential(spec, credentials: credentials)
         let home = homeFolder(forCwd: spec.cwd)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
 
@@ -115,8 +110,8 @@ public struct DockerEngine: IsolationEngine {
         }
         // Values travel in the docker CLI's environment, never on its command line.
         var environment = ClaudeCLI.environment()
-        environment["CLAUDE_CODE_OAUTH_TOKEN"] = token
-        args += ["--env", "CLAUDE_CODE_OAUTH_TOKEN"]
+        environment[credential.name] = credential.value
+        args += ["--env", credential.name]
         for name in spec.agentEnvironment.sorted() {
             guard let value = spec.environment[name] else { continue }
             environment[name] = value
@@ -129,6 +124,16 @@ public struct DockerEngine: IsolationEngine {
         wrapped.arguments = args
         wrapped.environment = environment
         return wrapped
+    }
+
+    /// How the container signs in: the run's Claude account if it has one, else the container token.
+    static func credential(_ spec: LaunchSpec, credentials: SecretStore) throws -> (name: String, value: String) {
+        if let key = spec.credential["ANTHROPIC_API_KEY"], !key.isEmpty { return ("ANTHROPIC_API_KEY", key) }
+        if let token = spec.credential["CLAUDE_CODE_OAUTH_TOKEN"], !token.isEmpty { return ("CLAUDE_CODE_OAUTH_TOKEN", token) }
+        guard let token = try credentials.value(for: tokenSecretId).map(cleanToken), !token.isEmpty else {
+            throw ClaudistError.invalid("No Claude subscription token for containers. Add it in Settings → Isolation, or give the agent a Claude account.")
+        }
+        return ("CLAUDE_CODE_OAUTH_TOKEN", token)
     }
 
     public func claudeConfigDir(forCwd cwd: URL) -> URL? {

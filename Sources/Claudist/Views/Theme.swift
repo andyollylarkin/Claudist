@@ -2,26 +2,27 @@ import ClaudistCore
 import AppKit
 import SwiftUI
 
-/// Visual language: warm sidebar, red accent, priority-colored circles, colored dates.
+/// Visual language after mindsw.io: indigo accent (#5856C1) on lavender-tinted neutrals,
+/// deep violet-black (#1D1B27) in dark mode, priority-colored circles, colored dates.
 enum Theme {
-    static let accent = Color(hex: 0xDC4C3E)
-    static let accentSoft = adaptive(light: 0xFFEFE5, dark: 0x3A2522)
+    static let accent = adaptive(light: 0x5856C1, dark: 0x7E76E4)
+    static let accentSoft = adaptive(light: 0xE3E3FF, dark: 0x2E2B4D)
 
-    static let background = adaptive(light: 0xFFFFFF, dark: 0x1F1F1F)
-    static let sidebar = adaptive(light: 0xFCFAF8, dark: 0x262626)
-    static let card = adaptive(light: 0xFFFFFF, dark: 0x2A2A2A)
-    static let hover = adaptive(light: 0xF5F3F0, dark: 0x303030)
-    static let divider = adaptive(light: 0xEEEEEE, dark: 0x363636)
-    static let border = adaptive(light: 0xE5E5E5, dark: 0x3D3D3D)
-    static let text = adaptive(light: 0x202020, dark: 0xE8E8E8)
-    static let secondary = adaptive(light: 0x666666, dark: 0xA8A8A8)
-    static let tertiary = adaptive(light: 0x8A8A8A, dark: 0x7A7A7A)
+    static let background = adaptive(light: 0xFFFFFF, dark: 0x1D1B27)
+    static let sidebar = adaptive(light: 0xF6F6FD, dark: 0x19191E)
+    static let card = adaptive(light: 0xFFFFFF, dark: 0x252331)
+    static let hover = adaptive(light: 0xEFEFFB, dark: 0x2B2939)
+    static let divider = adaptive(light: 0xE8E8F4, dark: 0x302E40)
+    static let border = adaptive(light: 0xDCDCEC, dark: 0x3A384E)
+    static let text = adaptive(light: 0x1D1B27, dark: 0xE9E8F4)
+    static let secondary = adaptive(light: 0x41425D, dark: 0xACABC9)
+    static let tertiary = adaptive(light: 0x81848F, dark: 0x7C7B93)
 
-    static let green = Color(hex: 0x058527)
+    static let green = adaptive(light: 0x218466, dark: 0x32A676)
     static let orange = Color(hex: 0xAD6200)
-    static let purple = Color(hex: 0x692EC2)
-    static let blue = Color(hex: 0x246FE0)
-    static let red = Color(hex: 0xD1453B)
+    static let purple = adaptive(light: 0x7949C2, dark: 0xACABFF)
+    static let blue = adaptive(light: 0x3367CE, dark: 0x85ADFC)
+    static let red = adaptive(light: 0xD1453B, dark: 0xF88787)
 
     static func priority(_ p: Int) -> Color {
         switch p {
@@ -36,7 +37,7 @@ enum Theme {
 
     static func color(_ name: String) -> Color {
         switch name {
-        case "red": Color(hex: 0xDC4C3E)
+        case "red": Color(hex: 0xD1453B)
         case "orange": Color(hex: 0xC77100)
         case "yellow": Color(hex: 0xB29104)
         case "olive": Color(hex: 0x949C31)

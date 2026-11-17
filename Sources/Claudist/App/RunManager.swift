@@ -47,6 +47,8 @@ final class RunManager: ObservableObject {
     private var databasesByRun: [ID: [DatabaseGrant]] = [:]
     /// Which tasks each run may change through the task tools (by runId).
     private var scopesByRun: [ID: AssistantTools.AgentScope] = [:]
+    /// Folders a run may map with the code graph tools (experimental); nil = the tools are off.
+    private var graphRootsByRun: [ID: [CodeGraphTools.Root]] = [:]
     /// One-off tasks started by the schedule in this session.
     private var scheduledOnce: Set<ID> = []
     /// Follow-up messages of resumed runs, to retry in a new conversation when the session is gone.
@@ -91,11 +93,25 @@ final class RunManager: ObservableObject {
     /// `trigger`: "manual", "schedule" or "agent" (called by another agent).
     func start(_ task: TaskItem, message: String? = nil, trigger: String = "manual", session: String? = nil, fresh: Bool = false) {
         guard live[task.id] == nil, !preparing.contains(task.id) else { return }
+        // A locked task's text reaches the agent only while the master password is entered.
+        if task.isLocked, !TaskVault.isOpen {
+            if trigger == "manual" { store.withVault { [weak self] in self?.start(task, message: message, trigger: trigger, session: session, fresh: fresh) } }
+            return
+        }
+        // The caller's copy may have been read while the vault was closed: take the decrypted one.
+        var task = task
+        if task.isLocked, let current = store.read({ try TaskItem.fetchOne($0, key: task.id) }) ?? nil { task = current }
         guard let agent = store.agent(task.agentId) else {
             store.errorMessage = "Assign an agent to this task first"
             return
         }
         guard var config = store.launchConfig(for: agent) else { return }
+        // Two accounts sharing one folder would share memory and files: no wall to keep.
+        if let clash = (store.read { try ClaudeAccounts.otherAccountAgents($0, of: agent) } ?? [])
+            .first(where: { URL(fileURLWithPath: $0.folderPath).standardizedFileURL == URL(fileURLWithPath: agent.folderPath).standardizedFileURL }) {
+            store.errorMessage = "\(agent.name) shares its folder with \(clash.name), which uses another Claude account. Give \(agent.name) its own folder in Agents → Runtime → Folder."
+            return
+        }
         config.taskId = task.id
         // Running the task again by hand supersedes an unanswered question.
         if trigger == "manual" && message == nil {
@@ -118,8 +134,7 @@ final class RunManager: ObservableObject {
             let cwd = URL(fileURLWithPath: agent.folderPath)
             let host = SessionFiles.hostConfigDir(environment: ClaudeCLI.environment())
             let engines = Isolation.engines(paths: store.paths, credentials: store.secretStore)
-            let target = task.runOnHost ? host
-                : engines.first { $0.id == Isolation.selected }?.claudeConfigDir(forCwd: cwd) ?? host
+            let target = engines.first { $0.id == Isolation.engineId(for: task) }?.claudeConfigDir(forCwd: cwd) ?? host
             let sources = [host] + engines.compactMap { $0.claudeConfigDir(forCwd: cwd) }
             if (try? SessionFiles.carry(sid, cwd: cwd, to: target, from: sources)) != true { resume = nil }
         }
@@ -140,10 +155,17 @@ final class RunManager: ObservableObject {
             let secrets = config.secrets
             let (secretEnv, secretValues) = try Secrets.environment(secrets, store: store.secretStore,
                                                                     fileDir: secretFiles(runId: run.id))
-            var environment = ClaudeCLI.environment().merging(secretEnv) { _, secret in secret }
+            // The agent's Claude account (or the default one) replaces this Mac's login.
+            let account = try store.db.writer.read { try ClaudeAccounts.resolve($0, agent: agent) }
+            let accountEnv = try ClaudeAccounts.environment(account, secrets: store.secretStore)
+            run.accountId = account?.id
+            var environment = ClaudeAccounts.hostEnvironment(accountEnv).merging(secretEnv) { _, secret in secret }
                 .merging(DatabaseAccess.environment(config.databases)) { current, _ in current }
             if !config.databases.isEmpty { databasesByRun[run.id] = config.databases }
-            scopesByRun[run.id] = AssistantTools.AgentScope(agentId: agent.id, agentName: agent.name, delegates: config.delegates.map(\.id))
+            let hidden = Set((store.read { try ClaudeAccounts.otherAccountAgents($0, of: agent) } ?? []).map(\.id))
+            scopesByRun[run.id] = AssistantTools.AgentScope(agentId: agent.id, agentName: agent.name,
+                                                            delegates: config.delegates.map(\.id), hidden: hidden)
+            if config.codeGraph { graphRootsByRun[run.id] = CodeGraphTools.roots(config) }
             if !config.delegates.isEmpty {
                 // A sub-agent call blocks the tool until the other agent finishes.
                 environment["MCP_TOOL_TIMEOUT"] = "86400000"
@@ -156,8 +178,9 @@ final class RunManager: ObservableObject {
                                   agentEnvironment: Array(secretEnv.keys) + Array(DatabaseAccess.environment(config.databases).keys)
                                       + (config.delegates.isEmpty ? [] : ["MCP_TOOL_TIMEOUT"]),
                                   mounts: [], runId: run.id)
+            spec.credential = accountEnv
             var engine: (any IsolationEngine)?
-            let engineId = task.runOnHost ? Isolation.none : Isolation.selected
+            let engineId = Isolation.engineId(for: task)
             if engineId != Isolation.none {
                 guard let found = Isolation.engine(engineId, paths: store.paths, credentials: store.secretStore) else {
                     throw ClaudistError.invalid("Unknown isolation engine \(engineId). Choose one in Settings → Isolation.")
@@ -173,7 +196,8 @@ final class RunManager: ObservableObject {
             }
             if case .needsPreparation = ready { run.status = .queued }
             // What the run is given, for the task's audit.
-            let access = RunAccess(config, isolation: engine?.title ?? "On this Mac")
+            var access = RunAccess(config, isolation: engine?.title ?? "On this Mac")
+            access.account = account?.name ?? (engine == nil ? "This Mac's login" : "Container token")
             let accessJSON = (try? JSONEncoder().encode(access)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             try store.db.writer.write { db in
                 try run.insert(db)
@@ -184,7 +208,7 @@ final class RunManager: ObservableObject {
             }
             let runId = run.id
             guard let engine else {
-                if task.runOnHost && Isolation.selected != Isolation.none {
+                if task.runOnHost {
                     record(runId: runId, kind: "note", ["text": "Running on this Mac: isolation is off for this task"])
                 }
                 try launch(spec, runId: runId, taskId: task.id, prompt: prompt)
@@ -248,6 +272,7 @@ final class RunManager: ObservableObject {
         delegatesByRun[runId] = nil
         databasesByRun[runId] = nil
         scopesByRun[runId] = nil
+        graphRootsByRun[runId] = nil
         try? FileManager.default.removeItem(at: secretFiles(runId: runId))
         if let engine = enginesByRun.removeValue(forKey: runId) {
             DispatchQueue.global(qos: .utility).async { engine.stop(runId: runId) }
@@ -257,6 +282,10 @@ final class RunManager: ObservableObject {
     /// Chat input: goes to the running process, or resumes the session in a new run.
     /// `files` are attached to the task first; a running agent picks them up in a resumed process.
     func send(_ task: TaskItem, text: String, files: [URL] = [], session: String? = nil) {
+        if task.isLocked, !TaskVault.isOpen {
+            store.withVault { [weak self] in self?.send(task, text: text, files: files, session: session) }
+            return
+        }
         // A decision on an access request updates the rights first; the agent gets told what was decided.
         var text = text
         var rightsChanged = false
@@ -457,6 +486,7 @@ final class RunManager: ObservableObject {
             tools += AssistantTools.agentToolDefinitions()
             tools += NotesTools.toolDefinitions(notesAccess(runId: runId, taskId: taskId))
             tools += Integrations.toolDefinitions(integrations(runId: runId, taskId: taskId))
+            if graphRootsByRun[runId] != nil { tools += CodeGraphTools.toolDefinitions() }
             process.respondMCP(requestId: requestId, id: id, result: ["tools": tools])
         case "tools/call" where message["params"]?["name"]?.string == Attention.toolName:
             let args = message["params"]?["arguments"]
@@ -542,6 +572,25 @@ final class RunManager: ObservableObject {
                 if isError { result["isError"] = true }
                 process.respondMCP(requestId: requestId, id: id, result: result)
             }
+        case "tools/call" where CodeGraphTools.toolNames.contains(message["params"]?["name"]?.string ?? ""):
+            let tool = message["params"]?["name"]?.string ?? ""
+            let args = message["params"]?["arguments"]
+            guard let roots = graphRootsByRun[runId] else {
+                process.respondMCP(requestId: requestId, id: id, result: ["content": [["type": "text", "text": "The code graph is off"]], "isError": true])
+                return
+            }
+            let engine = store.graphEngine
+            DispatchQueue.global(qos: .userInitiated).async {
+                let outcome = CodeGraphTools.call(tool, args, engine: engine, roots: roots) { line in
+                    DispatchQueue.main.async { self.record(runId: runId, kind: "note", ["text": line]) }
+                }
+                DispatchQueue.main.async {
+                    if let view = outcome.view { self.record(runId: runId, kind: "graph", CodeGraphTools.eventPayload(view)) }
+                    var result: [String: Any] = ["content": [["type": "text", "text": outcome.text]]]
+                    if outcome.isError { result["isError"] = true }
+                    process.respondMCP(requestId: requestId, id: id, result: result)
+                }
+            }
         case "tools/call" where DatabaseAccess.toolNames.contains(message["params"]?["name"]?.string ?? ""):
             let tool = message["params"]?["name"]?.string ?? ""
             let args = message["params"]?["arguments"]
@@ -596,6 +645,7 @@ final class RunManager: ObservableObject {
         child.priority = parent.priority
         // Same isolation as the caller: a containerized agent can't get work done on the host, and back.
         child.runOnHost = parent.runOnHost
+        child.isolation = parent.isolation
         child.source = "agent"
         do {
             try store.db.writer.write { db in

@@ -34,6 +34,84 @@ struct BoardView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 8)
         }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// How a board column orders its cards; chosen per column and remembered.
+enum ColumnSort: String, CaseIterable {
+    case manual, priority, due, name, added
+
+    var title: String {
+        switch self {
+        case .manual: "Manual"
+        case .priority: "Priority"
+        case .due: "Due date"
+        case .name: "Name"
+        case .added: "Date added"
+        }
+    }
+
+    func apply(_ tasks: [TaskItem]) -> [TaskItem] {
+        guard self != .manual else { return tasks }
+        // Stable: ties keep the manual order.
+        return Array(tasks.enumerated()).sorted { a, b in
+            switch ordered(a.element, b.element) {
+            case .some(let before): before
+            case .none: a.offset < b.offset
+            }
+        }.map(\.element)
+    }
+
+    /// Whether `a` goes before `b`; nil when they tie.
+    private func ordered(_ a: TaskItem, _ b: TaskItem) -> Bool? {
+        func cmp<T: Comparable>(_ x: T, _ y: T) -> Bool? { x == y ? nil : x < y }
+        switch self {
+        case .manual: return nil
+        case .priority: return cmp(a.priority, b.priority)
+        case .due:
+            // Undated last.
+            return cmp(a.dueDate == nil ? 1 : 0, b.dueDate == nil ? 1 : 0)
+                ?? cmp(a.dueDate ?? "", b.dueDate ?? "") ?? cmp(a.dueTime ?? "99", b.dueTime ?? "99")
+        case .name: return cmp(a.content.localizedLowercase, b.content.localizedLowercase)
+        // Newest first.
+        case .added: return cmp(b.createdAt, a.createdAt)
+        }
+    }
+
+    private static let storageKey = "boardColumnSorts"
+
+    static func stored(_ columnId: String) -> ColumnSort {
+        let all = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String] ?? [:]
+        return all[columnId].flatMap(ColumnSort.init) ?? .manual
+    }
+
+    static func store(_ sort: ColumnSort, for columnId: String) {
+        var all = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String] ?? [:]
+        all[columnId] = sort == .manual ? nil : sort.rawValue
+        UserDefaults.standard.set(all, forKey: storageKey)
+    }
+}
+
+private struct ColumnSortMenu: View {
+    @Binding var sort: ColumnSort
+
+    var body: some View {
+        Menu {
+            Picker("Sort by", selection: $sort) {
+                ForEach(ColumnSort.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.system(size: 11, weight: sort == .manual ? .regular : .semibold))
+                .foregroundStyle(sort == .manual ? Theme.tertiary : Theme.accent)
+                .frame(width: 20, height: 18)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(sort == .manual ? "Sort tasks" : "Sorted by \(sort.title.lowercased())")
     }
 }
 
@@ -44,6 +122,7 @@ private struct ColumnView: View {
     let showProject: Bool
     @State private var targeted = false
     @State private var renaming = false
+    @State private var sort: ColumnSort = .manual
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -51,7 +130,7 @@ private struct ColumnView: View {
                 .padding(.horizontal, 4)
             ScrollView(.vertical) {
                 LazyVStack(spacing: 8) {
-                    ForEach(column.tasks) { task in
+                    ForEach(sort.apply(column.tasks)) { task in
                         TaskCard(task: task, decor: decor, showProject: showProject)
                     }
                     if let make = column.newTask {
@@ -72,6 +151,8 @@ private struct ColumnView: View {
         .dropDestination(for: String.self) { ids, _ in
             handleColumnDrop(ids, column: column, store: store)
         } isTargeted: { targeted = $0 && (column.onDrop != nil || column.reordersSections) }
+        .onAppear { sort = ColumnSort.stored(column.id) }
+        .onChange(of: sort) { _, new in ColumnSort.store(new, for: column.id) }
     }
 
     @ViewBuilder private var header: some View {
@@ -80,6 +161,7 @@ private struct ColumnView: View {
                 SectionTitle(section: section, editing: $renaming)
                 Text("\(column.tasks.count)").font(.system(size: 12)).foregroundStyle(Theme.tertiary)
                 Spacer()
+                ColumnSortMenu(sort: $sort)
                 SectionMenu(section: section, horizontal: true) { renaming = true }
             }
             .contentShape(Rectangle())
@@ -94,6 +176,7 @@ private struct ColumnView: View {
                     .lineLimit(1)
                 Text("\(column.tasks.count)").font(.system(size: 12)).foregroundStyle(Theme.tertiary)
                 Spacer()
+                ColumnSortMenu(sort: $sort)
             }
         }
     }

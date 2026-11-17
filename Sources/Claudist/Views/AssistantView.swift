@@ -223,6 +223,9 @@ private struct ChatPane: View {
                 .frame(maxWidth: 860, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            .environment(\.composerInsert) { text in
+                message = message.isEmpty || message.hasSuffix(" ") ? message + text : message + " " + text
+            }
             .onAppear { proxy.scrollTo(items.last?.id, anchor: .bottom) }
             .onChange(of: events.value.count) {
                 withAnimation { proxy.scrollTo(liveChat?.busy == true ? "progress" : items.last?.id, anchor: .bottom) }
@@ -266,8 +269,8 @@ private struct ChatPane: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .lineLimit(1...8)
+                .shiftReturnInsertsNewline()
                 .onSubmit { send(message) }
-                .onKeyPress(.return, phases: .down) { $0.modifiers.contains(.shift) ? AgentRunPanel.insertNewline() : .ignored }
             if liveChat?.busy == true {
                 Button { if let id = chat?.id { assistant.stop(id) } } label: {
                     Image(systemName: "stop.circle.fill").font(.system(size: 22)).foregroundStyle(Theme.secondary)

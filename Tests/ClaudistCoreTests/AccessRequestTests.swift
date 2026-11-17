@@ -91,12 +91,16 @@ struct AccessRequestTests {
         #expect(AgentWorkspace.readOnlyRules(work, except: []) == ["Edit(/\(work)/**)", "Write(/\(work)/**)"])
         #expect(AgentWorkspace.readOnlyRules(work, except: [work]) == [])
         let rules = AgentWorkspace.readOnlyRules(work, except: [repo])
-        #expect(rules.contains("Edit(/\(work)/*)"))
+        // Files of the level are denied by name: a "work/*" rule would also take in work/repo and all below it.
+        #expect(rules.contains("Edit(/\(work)/readme.md)"))
+        #expect(!rules.contains { $0.hasSuffix("/*)") })
         #expect(rules.contains("Edit(/\(work)/other/**)"))
         #expect(rules.contains("Write(/\(work)/repo2/**)"))
         #expect(!rules.contains { $0.contains("/repo/") || $0.hasSuffix("/repo/**)") })
         let deep = AgentWorkspace.readOnlyRules(work, except: [repo + "/pkg"])
-        #expect(deep.contains("Edit(/\(repo)/*)"))
-        #expect(!deep.contains { $0.contains("/pkg") })
+        #expect(!deep.contains { $0.contains("/pkg") || $0.hasSuffix("/*)") })
+        #expect(deep.contains("Edit(/\(work)/other/**)"))
+        // A read-only folder inside a writable one changes nothing: everything below a writable path stays writable.
+        #expect(AgentWorkspace.readOnlyRules(repo + "/pkg", except: [repo]) == [])
     }
 }

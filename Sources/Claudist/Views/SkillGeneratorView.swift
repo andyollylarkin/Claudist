@@ -111,7 +111,7 @@ final class SkillGeneration: ObservableObject {
         let process = AgentProcess(executable: try ClaudeCLI.executable(),
                                    arguments: SkillGenerator.arguments(options),
                                    cwd: draft,
-                                   environment: ClaudeCLI.environment()) { [weak self] event in
+                                   environment: ClaudeAccounts.defaultHostEnvironment()) { [weak self] event in
             DispatchQueue.main.async { self?.handle(event) }
         }
         self.process = process

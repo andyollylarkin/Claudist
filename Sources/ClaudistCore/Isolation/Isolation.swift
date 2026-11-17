@@ -25,6 +25,9 @@ public struct LaunchSpec: Sendable {
     public var mounts: [IsolationMount]
     /// Unique per run; engines use it to name and later kill what they started.
     public var runId: ID
+    /// The run's Claude account credential (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`), kept apart
+    /// from the environment so a same-named secret or host variable is never mistaken for it.
+    public var credential: [String: String] = [:]
 
     public init(executable: URL, arguments: [String], cwd: URL, environment: [String: String],
                 agentEnvironment: [String], mounts: [IsolationMount], runId: ID) {
@@ -133,17 +136,34 @@ public enum Isolation {
     public static let settingKey = "isolation.engine"
     public static let defaultEngine = DockerEngine.engineId
 
+    /// Engines that were replaced: old id → its successor.
+    static let renamed = ["docker-host": DockerConnectedEngine.engineId]
+
     /// The engine id from the app settings.
     public static var selected: String {
-        UserDefaults.standard.string(forKey: settingKey) ?? defaultEngine
+        current(UserDefaults.standard.string(forKey: settingKey) ?? defaultEngine)
+    }
+
+    public static func current(_ id: String) -> String { renamed[id] ?? id }
+
+    /// Rewrites a replaced engine id in the settings, so the settings screen shows its successor.
+    public static func migrateSetting() {
+        if let id = UserDefaults.standard.string(forKey: settingKey), let new = renamed[id] {
+            UserDefaults.standard.set(new, forKey: settingKey)
+        }
+    }
+
+    /// The engine a task's runs use: on this Mac, its own choice, or the settings' one.
+    public static func engineId(for task: TaskItem) -> String {
+        task.runOnHost ? none : current(task.isolation ?? selected)
     }
 
     public static func engines(paths: AppPaths, credentials: SecretStore) -> [any IsolationEngine] {
-        [DockerEngine(paths: paths, credentials: credentials)]
+        [DockerEngine(paths: paths, credentials: credentials), DockerConnectedEngine(paths: paths, credentials: credentials)]
     }
 
     public static func engine(_ id: String, paths: AppPaths, credentials: SecretStore) -> (any IsolationEngine)? {
-        engines(paths: paths, credentials: credentials).first { $0.id == id }
+        engines(paths: paths, credentials: credentials).first { $0.id == current(id) }
     }
 
     /// Host paths an isolated run needs: the agent folder (read-write), its settings file,

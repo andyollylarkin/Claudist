@@ -9,6 +9,8 @@ struct ClaudistApp: App {
     @StateObject private var runs: RunManager
     @StateObject private var assistant: AssistantManager
     @StateObject private var usage: UsageMonitor
+    @StateObject private var appHost: MiniAppHost
+    @StateObject private var builder: AppBuilderManager
 
     init() {
         let store = AppStore()
@@ -17,6 +19,13 @@ struct ClaudistApp: App {
         _runs = StateObject(wrappedValue: runs)
         _assistant = StateObject(wrappedValue: AssistantManager(store: store, runs: runs))
         _usage = StateObject(wrappedValue: UsageMonitor(db: store.db))
+        // The scheme handler reads the policy straight from the database: it must be current on every load.
+        let writer = store.db.writer
+        let host = MiniAppHost(paths: store.paths) { id in (try? writer.read { try MiniApp.fetchOne($0, key: id) }) ?? nil }
+        _appHost = StateObject(wrappedValue: host)
+        _builder = StateObject(wrappedValue: AppBuilderManager(store: store, host: host))
+        CodeGraphHost.shared.configure(paths: store.paths)
+        CodeGraphHost.shared.openTask = { [weak store] id in store?.selectedTaskId = id }
     }
 
     var body: some Scene {
@@ -26,6 +35,8 @@ struct ClaudistApp: App {
                 .environmentObject(runs)
                 .environmentObject(assistant)
                 .environmentObject(usage)
+                .environmentObject(appHost)
+                .environmentObject(builder)
                 .frame(minWidth: 960, minHeight: 600)
         }
         .commands {
@@ -39,6 +50,16 @@ struct ClaudistApp: App {
                     .keyboardShortcut("n", modifiers: [.command])
                 Button("Assistant") { store.selection = .assistant }
                     .keyboardShortcut("j", modifiers: [.command])
+                Button("New App…") { store.showingNewApp = true }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                Button("Lock Tasks Now") { store.closeVault() }
+                    .keyboardShortcut("l", modifiers: [.command, .control])
+                    .disabled(!store.vaultOpen)
+                Button("Search Tasks") { NotificationCenter.default.post(name: .searchTasks, object: nil) }
+                    .keyboardShortcut("f", modifiers: [.command])
+                Button(store.taskExpanded ? "Show Task in Side Panel" : "Open Task Full Screen") { store.taskExpanded.toggle() }
+                    .keyboardShortcut(.return, modifiers: [.command, .shift])
+                    .disabled(store.selectedTaskId == nil)
             }
         }
 
@@ -65,10 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        TDLibClient.shutdown()
+    }
 }
 
 extension Notification.Name {
     static let newTask = Notification.Name("Claudist.newTask")
+    static let searchTasks = Notification.Name("Claudist.searchTasks")
 }
 
 struct MenuBarContent: View {

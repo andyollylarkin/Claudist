@@ -249,16 +249,35 @@ public enum AssistantTools {
         /// The agent itself and the agents it may delegate to.
         public var allowedAgents: Set<ID>
 
-        public init(agentId: ID, agentName: String, delegates: [ID]) {
+        /// Agents on other Claude accounts: their tasks don't exist for this caller.
+        public var hidden: Set<ID>
+
+        public init(agentId: ID, agentName: String, delegates: [ID], hidden: Set<ID> = []) {
             self.agentId = agentId
             self.agentName = agentName
-            self.allowedAgents = Set(delegates + [agentId])
+            self.hidden = hidden
+            self.allowedAgents = Set(delegates + [agentId]).subtracting(hidden)
+        }
+
+        /// Unassigned tasks and those of agents on the caller's account.
+        func sees(_ task: TaskItem) -> Bool {
+            task.agentId.map { !hidden.contains($0) } ?? true
+        }
+
+        /// Throws when the caller may not see the task.
+        ///
+        /// Returns nothing on purpose: as `throws -> TaskItem` (handing the task back), Swift 6.0.3's
+        /// optimizer left a pointer in the error register on the success path, so callers saw a
+        /// bogus error and crashed retaining it. Keep it Void.
+        func ensureVisible(_ task: TaskItem) throws {
+            guard sees(task) else { throw ClaudistError.invalid("No task with id \(task.id); use find_tasks") }
         }
 
         /// Changing (or commenting on) a task feeds its agent; only tasks without an agent,
         /// its own, or its delegates' are open to the caller. A task that runs on the Mac takes
         /// comments only: its prompt shows them as other agents' notes, not as the user's words.
         func check(_ task: TaskItem, commenting: Bool = false) throws {
+            try ensureVisible(task)
             // Its text becomes the prompt of a run outside isolation; an isolated agent must not write it.
             if task.runOnHost && !commenting {
                 throw ClaudistError.invalid("""
@@ -292,10 +311,10 @@ public enum AssistantTools {
         }
         switch name {
         case "overview": return try db.read { try overview($0, library: workspace.library) }
-        case "list_projects": return try db.read { try listProjects($0, archived: a["include_archived"]?.bool ?? false) }
+        case "list_projects": return try db.read { try listProjects($0, archived: a["include_archived"]?.bool ?? false, scope: scope) }
         case "find_tasks":
-            return try db.read { try findTasks($0, filter: a["filter"]?.string ?? "", limit: a["limit"]?.number.map { Int($0) } ?? 50) }
-        case "get_task": return try db.read { try getTask($0, id: try require(a, "id")) }
+            return try db.read { try findTasks($0, filter: a["filter"]?.string ?? "", limit: a["limit"]?.number.map { Int($0) } ?? 50, scope: scope) }
+        case "get_task": return try db.read { try getTask($0, id: try require(a, "id"), scope: scope) }
         case "list_agents": return try db.read { try listAgents($0) }
         case "get_agent": return try db.read { try getAgent($0, name: try require(a, "name")) }
         case "list_runs":
@@ -346,7 +365,7 @@ public enum AssistantTools {
             return try db.write { db in
                 let task = try task(db, try require(a, "task_id"))
                 try scope?.check(task, commenting: true)
-                try Comment(taskId: task.id, content: try require(a, "text"), author: scope.map { "agent: \($0.agentName)" } ?? "assistant").insert(db)
+                try Comment.make(db, taskId: task.id, content: try require(a, "text"), author: scope.map { "agent: \($0.agentName)" } ?? "assistant").insert(db)
                 return ok("Commented on “\(task.content)”")
             }
         case "create_project":
@@ -433,14 +452,17 @@ public enum AssistantTools {
         ])
     }
 
-    static func listProjects(_ db: Database, archived: Bool) throws -> String {
+    static func listProjects(_ db: Database, archived: Bool, scope: AgentScope? = nil) throws -> String {
+        let hidden = Array(scope?.hidden ?? [])
+        let notHidden = hidden.isEmpty ? "" : " AND (agentId IS NULL OR agentId NOT IN (\(hidden.map { _ in "?" }.joined(separator: ","))))"
         let projects = try Project.order(Column("childOrder"), Column("name")).fetchAll(db).filter { archived || !$0.isArchived }
         let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
         return encode(try projects.map { p -> [String: Any] in
             var d: [String: Any] = [
                 "id": p.id, "name": p.name, "color": p.color,
                 "sections": try String.fetchAll(db, sql: "SELECT name FROM section WHERE projectId = ? ORDER BY sectionOrder", arguments: [p.id]),
-                "open_tasks": try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM task WHERE projectId = ? AND isCompleted = 0", arguments: [p.id]) ?? 0,
+                "open_tasks": try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM task WHERE projectId = ? AND isCompleted = 0" + notHidden,
+                                               arguments: StatementArguments([p.id] + hidden)) ?? 0,
             ]
             if let parent = p.parentId { d["parent"] = names[parent] ?? parent }
             if p.isArchived { d["archived"] = true }
@@ -449,13 +471,16 @@ public enum AssistantTools {
         })
     }
 
-    static func findTasks(_ db: Database, filter: String, limit: Int) throws -> String {
+    static func findTasks(_ db: Database, filter: String, limit: Int, scope: AgentScope? = nil) throws -> String {
         let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        let groups: [(title: String, tasks: [TaskItem])]
+        var groups: [(title: String, tasks: [TaskItem])]
         if query.isEmpty {
             groups = [("open", try TaskItem.fetchAll(db, sql: "SELECT t.* FROM task t WHERE t.isCompleted = 0 ORDER BY \(FilterEngine.orderBy)"))]
         } else {
             groups = try FilterEngine.tasks(db, query: query, context: FilterContext(now: Date()))
+        }
+        if let scope {
+            groups = groups.map { ($0.title, $0.tasks.filter(scope.sees)) }.filter { !$0.tasks.isEmpty }
         }
         let total = groups.reduce(0) { $0 + $1.tasks.count }
         var left = max(1, limit)
@@ -489,16 +514,19 @@ public enum AssistantTools {
         return d
     }
 
-    static func getTask(_ db: Database, id: String) throws -> String {
-        let t = try task(db, id)
+    static func getTask(_ db: Database, id: String, scope: AgentScope? = nil) throws -> String {
+        var t = try task(db, id)
+        if let scope { try scope.ensureVisible(t) }
         var d = try summary(db, t)
-        if !t.description.isEmpty { d["description"] = t.description }
+        if !t.description.isEmpty { d["description"] = t.isSealed ? TaskVault.hiddenText : t.description }
+        if t.isLocked { d["locked"] = true }
         if !t.attentionChoices.isEmpty { d["needs_you_options"] = t.attentionChoices }
         d["created"] = t.createdAt
         if let source = t.source { d["source"] = source }
         d["comments"] = try Comment.filter(Column("taskId") == t.id).order(Column("createdAt")).fetchAll(db)
-            .map { ["by": $0.author, "at": $0.createdAt, "text": $0.content] }
+            .map { ["by": $0.author, "at": $0.createdAt, "text": $0.isSealed ? TaskVault.hiddenText : $0.content] }
         d["subtasks"] = try TaskItem.filter(Column("parentId") == t.id).order(Column("childOrder")).fetchAll(db)
+            .filter { scope?.sees($0) ?? true }
             .map { ["id": $0.id, "content": $0.content, "completed": $0.isCompleted] }
         d["attachments"] = try TaskAttachment.filter(Column("taskId") == t.id).fetchAll(db)
             .map { ["path": $0.path, "writable": $0.writable, "exists": $0.exists] }
@@ -658,7 +686,8 @@ public enum AssistantTools {
         var t = TaskItem(projectId: p.id, content: try require(a, "content"))
         t.description = a["description"]?.string ?? ""
         if let parent = a["parent_id"]?.string, !parent.isEmpty {
-            let parentTask = try task(db, parent)
+            var parentTask = try task(db, parent)
+            if let scope { try scope.ensureVisible(parentTask) }
             t.parentId = parentTask.id
             t.projectId = parentTask.projectId
             t.sectionId = parentTask.sectionId
@@ -850,8 +879,12 @@ public enum AssistantTools {
 public enum AssistantSession {
     /// The assistant gets no built-in tools (no files, no shell): only the app's tools,
     /// with no user skills, commands or MCP servers.
-    public static func arguments(model: String?, confirmChanges: Bool, resume sessionId: String?) -> [String] {
-        let allowed = AssistantTools.all.filter { !$0.mutating || !confirmChanges }.map { AssistantTools.qualified($0.name) }
+    /// `graphRoots`: folders the experimental code graph tools may map; nil when they are off.
+    public static func arguments(model: String?, confirmChanges: Bool, resume sessionId: String?,
+                                 graphRoots: [CodeGraphTools.Root]? = nil) -> [String] {
+        var allowed = AssistantTools.all.filter { !$0.mutating || !confirmChanges }.map { AssistantTools.qualified($0.name) }
+        // Graphs only read code: they change nothing.
+        if graphRoots != nil { allowed += CodeGraphTools.toolNames.map(CodeGraphTools.qualified) }
         let settings = AssistantTools.encode(["permissions": ["allow": allowed]])
         var args = [
             "-p",
@@ -866,14 +899,14 @@ public enum AssistantSession {
             "--mcp-config", Delegation.mcpConfig,
             "--disable-slash-commands",
             "--tools", "",
-            "--append-system-prompt", AssistantTools.systemPrompt(),
+            "--append-system-prompt", AssistantTools.systemPrompt() + (graphRoots.map { "\n\n" + CodeGraphTools.promptSection($0) } ?? ""),
         ]
         if let model, !model.isEmpty { args += ["--model", model] }
         if let sessionId { args += ["--resume", sessionId] }
         return args
     }
 
-    public static func toolDefinitions() -> [[String: Any]] {
-        AssistantTools.all.map(\.definition)
+    public static func toolDefinitions(codeGraph: Bool = false) -> [[String: Any]] {
+        AssistantTools.all.map(\.definition) + (codeGraph ? CodeGraphTools.toolDefinitions() : [])
     }
 }

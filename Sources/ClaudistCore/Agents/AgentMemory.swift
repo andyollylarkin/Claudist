@@ -51,4 +51,40 @@ public enum AgentMemory {
         }
         return out
     }
+
+    /// Moves one auto-memory file to another agent folder's memory, on the Mac and in Docker both
+    /// (an agent may run either way), with its MEMORY.md line; the source loses the file and the line.
+    public static func move(_ file: File, toAgentFolder target: String, paths: AppPaths, environment: [String: String]) throws {
+        let fm = FileManager.default
+        guard file.kind == .memory, file.name != "MEMORY.md" else {
+            throw ClaudistError.invalid("Only memory files can be moved, not the index or CLAUDE.md")
+        }
+        let source = file.url.deletingLastPathComponent()
+        let destinations = memoryFolders(agentFolder: target, paths: paths, environment: environment).map(\.url)
+        guard !destinations.contains(where: { $0.standardizedFileURL == source.standardizedFileURL }) else {
+            throw ClaudistError.invalid("That agent already has this memory (it uses the same folder)")
+        }
+        if let taken = destinations.first(where: { fm.fileExists(atPath: $0.appendingPathComponent(file.name).path) }) {
+            throw ClaudistError.invalid("The agent already remembers a \(file.name) (\(taken.path))")
+        }
+
+        let link = "(\(file.name))"
+        let sourceIndex = source.appendingPathComponent("MEMORY.md")
+        let indexLines = ((try? String(contentsOf: sourceIndex, encoding: .utf8)) ?? "").components(separatedBy: "\n")
+        let entry = indexLines.first { $0.contains(link) }
+            ?? "- [\(file.url.deletingPathExtension().lastPathComponent)](\(file.name))"
+
+        for dir in destinations {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.copyItem(at: file.url, to: dir.appendingPathComponent(file.name))
+            let index = dir.appendingPathComponent("MEMORY.md")
+            var text = (try? String(contentsOf: index, encoding: .utf8)) ?? ""
+            if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+            try Data((text + entry + "\n").utf8).write(to: index, options: .atomic)
+        }
+        try fm.removeItem(at: file.url)
+        if fm.fileExists(atPath: sourceIndex.path) {
+            try Data(indexLines.filter { !$0.contains(link) }.joined(separator: "\n").utf8).write(to: sourceIndex, options: .atomic)
+        }
+    }
 }

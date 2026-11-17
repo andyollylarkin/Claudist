@@ -79,6 +79,12 @@ public struct TaskItem: Codable, Sendable, Identifiable, Hashable, FetchableReco
     public var attentionAt: String?
     /// Run this task's agent directly on the Mac, without the isolation engine. Set by the user only.
     public var runOnHost = false
+    /// Isolation engine id for this task's runs; nil = the one chosen in Settings. Set by the user only.
+    public var isolation: String?
+    /// Marked by the user to find again (the `flagged` filter).
+    public var isFlagged = false
+    /// Description and comments are encrypted with the master password (`TaskVault`).
+    public var isLocked = false
 
     public init(projectId: ID, content: String) {
         self.projectId = projectId
@@ -107,6 +113,8 @@ public struct Comment: Codable, Sendable, Identifiable, Hashable, FetchableRecor
     public var content: String
     public var author = "user"
     public var createdAt = LocalDate.stamp(Date())
+    /// Encrypted with the master password, as its task is locked.
+    public var isLocked = false
 
     public init(taskId: ID, content: String, author: String = "user") {
         self.taskId = taskId
@@ -147,6 +155,8 @@ public struct Agent: Codable, Sendable, Identifiable, Hashable, FetchableRecord,
     public var denyRules = "[]"
     /// The user's notes through the app's note tools; nil = none.
     public var notesAccess: StorageAccess? = .rw
+    /// Claude account to run on: nil = the default, `ClaudeAccounts.macLogin`, or an account id.
+    public var accountId: ID?
     public var createdAt = LocalDate.stamp(Date())
 
     public init(name: String, folderPath: String) {
@@ -224,6 +234,8 @@ public struct Run: Codable, Sendable, Identifiable, Hashable, FetchableRecord, P
     public var dismissed = false
     /// The user opened the task after this run ended ("To review").
     public var reviewed = false
+    /// The Claude account it ran on (nil = this Mac's login or the container token).
+    public var accountId: ID?
 
     public init(taskId: ID, agentId: ID?, trigger: String = "manual") {
         self.taskId = taskId

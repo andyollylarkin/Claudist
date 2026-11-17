@@ -379,6 +379,98 @@ public enum Schema {
             }
         }
 
+        m.registerMigration("v18-recordings") { db in
+            try db.create(table: "recording") { t in
+                t.primaryKey("id", .text)
+                t.column("title", .text).notNull()
+                t.column("createdAt", .text).notNull()
+                t.column("duration", .double).notNull().defaults(to: 0)
+                t.column("sourceApp", .text)
+                t.column("micFile", .text)
+                t.column("systemFile", .text)
+                t.column("status", .text).notNull()
+                t.column("error", .text)
+                t.column("transcript", .text)
+                t.column("notePath", .text)
+                t.column("model", .text)
+            }
+        }
+
+        m.registerMigration("v19-claude-accounts") { db in
+            try db.create(table: "claudeAccount") { t in
+                t.primaryKey("id", .text)
+                t.column("name", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("itemOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .text).notNull()
+            }
+            try db.alter(table: "agent") { t in t.add(column: "accountId", .text) }
+            try db.alter(table: "run") { t in t.add(column: "accountId", .text) }
+        }
+        m.registerMigration("v20-task-isolation") { db in
+            try db.alter(table: "task") { t in t.add(column: "isolation", .text) }
+        }
+        m.registerMigration("v21-task-search") { db in
+            // Full-text index of task titles and descriptions, kept in sync by triggers.
+            try db.create(virtualTable: TaskSearch.table, using: FTS5()) { t in
+                t.synchronize(withTable: "task")
+                t.tokenizer = .unicode61(diacritics: .remove)
+                t.column("content")
+                t.column("description")
+            }
+        }
+
+        m.registerMigration("v22-task-flag") { db in
+            try db.alter(table: "task") { t in t.add(column: "isFlagged", .boolean).notNull().defaults(to: false) }
+            // A ready filter for them, unless the user already has one by that name.
+            let exists = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM filter WHERE name = 'Flagged' COLLATE NOCASE)") ?? false
+            if !exists {
+                let order = try Int.fetchOne(db, sql: "SELECT COALESCE(MAX(itemOrder), -1) + 1 FROM filter") ?? 0
+                try db.execute(sql: """
+                    INSERT INTO filter (id, name, query, color, isFavorite, viewStyle, groupBy, itemOrder)
+                    VALUES (?, 'Flagged', 'flagged', 'orange', 1, 'list', 'none', ?)
+                    """, arguments: [newID(), order])
+            }
+        }
+
+        m.registerMigration("v23-mini-apps") { db in
+            // Client-side apps made in the App Builder, and the builder's conversations.
+            try db.create(table: "miniApp") { t in
+                t.primaryKey("id", .text)
+                t.column("name", .text).notNull()
+                t.column("icon", .text).notNull().defaults(to: "")
+                t.column("summary", .text).notNull().defaults(to: "")
+                t.column("offline", .boolean).notNull().defaults(to: true)
+                t.column("network", .boolean).notNull().defaults(to: false)
+                t.column("networkHosts", .text).notNull().defaults(to: "")
+                t.column("itemOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .text).notNull()
+                t.column("updatedAt", .text).notNull()
+            }
+            try db.create(table: "appBuilderChat") { t in
+                t.primaryKey("id", .text)
+                t.column("appId", .text).notNull().indexed().references("miniApp", onDelete: .cascade)
+                t.column("title", .text).notNull()
+                t.column("accountId", .text).notNull()
+                t.column("model", .text).notNull().defaults(to: "")
+                t.column("sessionId", .text)
+                t.column("createdAt", .text).notNull()
+                t.column("updatedAt", .text).notNull()
+            }
+            try db.create(table: "appBuilderEvent") { t in
+                t.autoIncrementedPrimaryKey("seq")
+                t.column("chatId", .text).notNull().indexed().references("appBuilderChat", onDelete: .cascade)
+                t.column("kind", .text).notNull()
+                t.column("json", .text).notNull()
+                t.column("createdAt", .text).notNull()
+            }
+        }
+
+        m.registerMigration("v24-task-lock") { db in
+            // Tasks locked with the master password.
+            try TaskVault.migrate(db)
+        }
+
         return m
     }
 }

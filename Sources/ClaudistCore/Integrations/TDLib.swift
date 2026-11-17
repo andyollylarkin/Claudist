@@ -24,6 +24,9 @@ public final class TDLibClient: @unchecked Sendable {
         let receive: Receive
         let lock = NSLock()
         var clients: [Int32: TDLibClientBox] = [:]
+        /// Cleared at quit; the receive thread then ends and signals `ended`.
+        var running = true
+        let ended = DispatchSemaphore(value: 0)
 
         init() throws {
             guard let path = TDLibClient.searchPaths.first(where: { FileManager.default.fileExists(atPath: $0) }),
@@ -40,12 +43,13 @@ public final class TDLibClient: @unchecked Sendable {
             // Quiet: TDLib logs to stderr otherwise, and its log may name chats.
             _ = #"{"@type":"setLogVerbosityLevel","new_verbosity_level":0}"#.withCString { unsafeBitCast(execute, to: Execute.self)($0) }
             let thread = Thread { [unowned self] in
-                while true {
-                    guard let raw = self.receive(1.0) else { continue }
+                while self.lock.withLock({ self.running }) {
+                    guard let raw = self.receive(0.25) else { continue }
                     guard let value = JSONValue.parse(String(cString: raw)), let id = value["@client_id"]?.number else { continue }
                     let client = self.lock.withLock { self.clients[Int32(id)]?.client }
                     client?.dispatch(value)
                 }
+                self.ended.signal()
             }
             thread.name = "TDLib"
             thread.start()
@@ -62,6 +66,20 @@ public final class TDLibClient: @unchecked Sendable {
             }
         }
     }
+
+    /// Closes every client and stops the receive thread before the process exits: a thread still inside
+    /// `td_receive` while static destructors run crashes the app on quit. Waits at most about 1.5 s.
+    public static func shutdown() {
+        guard let library = Library.sharedLock.withLock({ Library.shared }) else { return }
+        let clients = library.lock.withLock { library.clients.values.compactMap(\.client) }
+        for client in clients { client.close() }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline, clients.contains(where: { !$0.isStopped }) { Thread.sleep(forTimeInterval: 0.05) }
+        library.lock.withLock { library.running = false }
+        _ = library.ended.wait(timeout: .now() + 0.5)
+    }
+
+    private var isStopped: Bool { lock.withLock { stopped } }
 
     private final class TDLibClientBox { weak var client: TDLibClient?; init(_ c: TDLibClient) { client = c } }
 

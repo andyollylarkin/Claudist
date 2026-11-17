@@ -108,6 +108,8 @@ public indirect enum FilterExpr: Equatable, Sendable {
     case noTime
     case noDeadline
     case recurring
+    /// Flagged by the user.
+    case flagged
 
     case subtask
     /// Always false: Claudist has no shared projects.

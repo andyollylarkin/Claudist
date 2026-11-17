@@ -781,7 +781,7 @@ final class ChartQueryWriter: ObservableObject {
         do {
             let process = AgentProcess(executable: try ClaudeCLI.executable(), arguments: ChartQueryGenerator.arguments(),
                                        cwd: FileManager.default.temporaryDirectory,
-                                       environment: ClaudeCLI.environment()) { [weak self] event in
+                                       environment: ClaudeAccounts.defaultHostEnvironment()) { [weak self] event in
                 DispatchQueue.main.async { self?.handle(event) }
             }
             self.process = process

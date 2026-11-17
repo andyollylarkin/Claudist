@@ -12,6 +12,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Claudist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# Code graph viewer (experimental): HTML/JS served to WebKit from the bundle.
+cp -R Resources/graph-viewer "$APP/Contents/Resources/graph-viewer"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,6 +32,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key><string>Claudist records your voice for transcripts when you press Record.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>Claudist records the sound of other apps (the other side of a call) when you press Record.</string>
 </dict>
 </plist>
 PLIST

@@ -171,6 +171,7 @@ enum TermClassifier {
         "no time": .noTime,
         "no deadline": .noDeadline,
         "recurring": .recurring,
+        "flagged": .flagged, "flag": .flagged,
         "subtask": .subtask, "subtasks": .subtask,
         "shared": .shared,
         "assigned": .assigned,

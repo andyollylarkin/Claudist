@@ -10,6 +10,8 @@ final class LiveChat: ObservableObject {
     /// A turn is in progress.
     @Published var busy = true
     var sawInit = false
+    /// App Builder chats: the app being worked on.
+    var appId: ID?
     var resumed = false
     var idleClose: DispatchWorkItem?
 
@@ -96,9 +98,9 @@ final class AssistantManager: ObservableObject {
             let defaults = UserDefaults.standard
             let args = AssistantSession.arguments(model: defaults.string(forKey: Self.modelKey),
                                                   confirmChanges: defaults.bool(forKey: Self.confirmKey),
-                                                  resume: chat.sessionId)
+                                                  resume: chat.sessionId, graphRoots: graphRoots())
             let process = AgentProcess(executable: try ClaudeCLI.executable(), arguments: args,
-                                       cwd: store.paths.assistant, environment: ClaudeCLI.environment()) { [weak self] event in
+                                       cwd: store.paths.assistant, environment: ClaudeAccounts.defaultHostEnvironment()) { [weak self] event in
                 DispatchQueue.main.async { self?.handle(event, chatId: chatId, message: message) }
             }
             let current = LiveChat(process: process)
@@ -142,7 +144,7 @@ final class AssistantManager: ObservableObject {
             }
 
         case .mcp(let requestId, _, let rpc):
-            handleMCP(requestId: requestId, rpc: rpc, process: current.process)
+            handleMCP(requestId: requestId, rpc: rpc, process: current.process, chatId: chatId)
 
         case .stderr(let text):
             record(chatId, "stderr", ["text": text])
@@ -164,7 +166,13 @@ final class AssistantManager: ObservableObject {
         }
     }
 
-    private func handleMCP(requestId: String, rpc: JSONValue, process: AgentProcess) {
+    /// Folders the assistant may map; nil while the code graph is off.
+    private func graphRoots() -> [CodeGraphTools.Root]? {
+        guard CodeGraph.isEnabled else { return nil }
+        return store.read { try CodeGraphTools.assistantRoots($0) } ?? []
+    }
+
+    private func handleMCP(requestId: String, rpc: JSONValue, process: AgentProcess, chatId: ID) {
         let id = rpc["id"]
         switch rpc["method"]?.string {
         case "initialize":
@@ -174,7 +182,7 @@ final class AssistantManager: ObservableObject {
                 "serverInfo": ["name": Delegation.serverName, "version": "1"],
             ])
         case "tools/list":
-            process.respondMCP(requestId: requestId, id: id, result: ["tools": AssistantSession.toolDefinitions()])
+            process.respondMCP(requestId: requestId, id: id, result: ["tools": AssistantSession.toolDefinitions(codeGraph: CodeGraph.isEnabled)])
         case "tools/call":
             let name = rpc["params"]?["name"]?.string ?? ""
             let args = rpc["params"]?["arguments"]
@@ -182,6 +190,20 @@ final class AssistantManager: ObservableObject {
                 var result: [String: Any] = ["content": [["type": "text", "text": text]]]
                 if error { result["isError"] = true }
                 process.respondMCP(requestId: requestId, id: id, result: result)
+            }
+            if CodeGraphTools.toolNames.contains(name) {
+                guard let roots = graphRoots() else { return reply("The code graph is off", error: true) }
+                let engine = store.graphEngine
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let outcome = CodeGraphTools.call(name, args, engine: engine, roots: roots) { line in
+                        DispatchQueue.main.async { self.record(chatId, "note", ["text": line]) }
+                    }
+                    DispatchQueue.main.async {
+                        if let view = outcome.view { self.record(chatId, "graph", CodeGraphTools.eventPayload(view)) }
+                        reply(outcome.text, error: outcome.isError)
+                    }
+                }
+                return
             }
             guard let tool = AssistantTools.tool(name) else { return reply("Unknown tool \(name)", error: true) }
             if tool.appAction {

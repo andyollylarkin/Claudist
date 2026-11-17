@@ -27,6 +27,8 @@ struct ProjectView: View {
                                 footer: AnyView(AddSectionField(project: project).padding(.top, 18)))
             }
         }
+        // Empty content must not let the header float to the middle.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("")
         .sheet(isPresented: $editing) { ProjectEditor(project: project) }
         .onAppear(perform: observe)

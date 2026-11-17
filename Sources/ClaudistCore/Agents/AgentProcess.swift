@@ -36,7 +36,13 @@ public final class AgentProcess: @unchecked Sendable {
     private let stdout = Pipe()
     private let stderr = Pipe()
     private let queue = DispatchQueue(label: "AgentProcess.write")
+    /// Guards the stdout buffer and the exit bookkeeping: the read handler and the termination
+    /// handler run on different threads.
+    private let readLock = NSLock()
     private var buffer = Data()
+    private var stdoutClosed = false
+    private var exitStatus: Int32?
+    private var exitReported = false
     private let onEvent: @Sendable (Event) -> Void
 
     public init(executable: URL, arguments: [String], cwd: URL, environment: [String: String], onEvent: @escaping @Sendable (Event) -> Void) {
@@ -55,8 +61,14 @@ public final class AgentProcess: @unchecked Sendable {
     public func start() throws {
         stdout.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
-            if data.isEmpty { h.readabilityHandler = nil; return }
-            self?.consume(data)
+            guard let self else { return }
+            if data.isEmpty {
+                h.readabilityHandler = nil
+                self.readLock.withLock { self.stdoutClosed = true }
+                self.reportExitIfDone()
+            } else {
+                self.readLock.withLock { self.consume(data) }
+            }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
@@ -64,11 +76,27 @@ public final class AgentProcess: @unchecked Sendable {
             self?.onEvent(.stderr(String(decoding: data, as: UTF8.self)))
         }
         process.terminationHandler = { [weak self] p in
-            // Drain whatever is left before reporting the exit.
-            if let rest = try? self?.stdout.fileHandleForReading.readToEnd(), !rest.isEmpty { self?.consume(rest) }
-            self?.onEvent(.exited(p.terminationStatus))
+            guard let self else { return }
+            self.readLock.withLock { self.exitStatus = p.terminationStatus }
+            self.reportExitIfDone()
+            // Normally stdout ends right after; a child still holding it open must not hide the exit.
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self else { return }
+                self.readLock.withLock { self.stdoutClosed = true }
+                self.reportExitIfDone()
+            }
         }
         try process.run()
+    }
+
+    /// The exit is reported once, after the last stdout line, so no event follows it.
+    private func reportExitIfDone() {
+        let status: Int32? = readLock.withLock {
+            guard stdoutClosed, let exitStatus, !exitReported else { return nil }
+            exitReported = true
+            return exitStatus
+        }
+        if let status { onEvent(.exited(status)) }
     }
 
     public func send(_ text: String) {
@@ -130,7 +158,9 @@ public final class AgentProcess: @unchecked Sendable {
         queue.async { try? self.stdin.fileHandleForWriting.write(contentsOf: data) }
     }
 
+    /// Called under `readLock`.
     private func consume(_ data: Data) {
+        guard !exitReported else { return }
         buffer.append(data)
         while let nl = buffer.firstIndex(of: 0x0A) {
             let line = buffer[buffer.startIndex..<nl]

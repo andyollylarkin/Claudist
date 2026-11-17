@@ -21,6 +21,12 @@ public struct AgentLaunchConfig: Sendable {
     public var promptTemplates: [PromptTemplate] = []
     /// Built-in integrations that are on and granted to the agent (Telegram…), served by the app.
     public var integrations: [String] = []
+    /// Folders of agents on other Claude accounts (and their memory): denied to every file tool.
+    public var foreignPaths: [String] = []
+    /// The app's database, denied when other accounts exist: it holds every account's tasks.
+    public var databaseFile: String?
+    /// Experimental code graph tools are on.
+    public var codeGraph = false
 
     public init(agent: Agent, skills: Set<String>, storages: [(storage: Storage, access: StorageAccess)], delegates: [Agent] = []) {
         self.agent = agent
@@ -76,22 +82,26 @@ public struct AgentWorkspace: Sendable {
         return settingsURL
     }
 
-    /// Edit/Write deny rules keeping `root` read-only except the `writable` paths inside it: at each level
-    /// down to a writable path, the files of that level and every other existing folder are denied.
-    /// (A folder created later next to the path is not covered; Bash isn't limited by these rules anyway.)
+    /// Edit/Write deny rules keeping `root` read-only except the `writable` paths inside it (and everything
+    /// below them): at each level down to a writable path, the existing files of that level and every other
+    /// existing folder are denied by name. A `level/*` rule can't be used: rules match like .gitignore, so it
+    /// takes in the folder on the way to the writable path and with it the whole writable subtree.
+    /// (A file or folder created later next to the path is not covered; Bash isn't limited by these rules anyway.)
     static func readOnlyRules(_ root: String, except writable: [String]) -> [String] {
         func rules(_ glob: String) -> [String] { ["Edit(/\(glob))", "Write(/\(glob))"] }
         let inner = writable.filter { $0.hasPrefix(root + "/") }
-        if writable.contains(root) { return [] }
+        if writable.contains(where: { root == $0 || root.hasPrefix($0 + "/") }) { return [] }
         guard !inner.isEmpty else { return rules(root + "/**") }
-        var out = rules(root + "/*")
+        var out: [String] = []
         let children = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
         for name in children.sorted() {
             let child = root + "/" + name
             var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: child, isDirectory: &isDir), isDir.boolValue else { continue }
+            guard FileManager.default.fileExists(atPath: child, isDirectory: &isDir) else { continue }
             if inner.contains(child) { continue }
-            if inner.contains(where: { $0.hasPrefix(child + "/") }) {
+            if !isDir.boolValue {
+                out += rules(child)
+            } else if inner.contains(where: { $0.hasPrefix(child + "/") }) {
                 out += readOnlyRules(child, except: inner)
             } else {
                 out += rules(child + "/**")
@@ -109,6 +119,14 @@ public struct AgentWorkspace: Sendable {
         for (storage, access) in config.storages where access == .ro {
             deny += Self.readOnlyRules(storage.path, except: writable)
         }
+        // Other accounts' agents: nothing of theirs is readable. Like read-only storage, these rules bind
+        // Claude Code's file tools; only the Docker engine keeps them out of reach of shell commands too.
+        for path in config.foreignPaths {
+            deny += ["Read(/\(path)/**)", "Edit(/\(path)/**)", "Write(/\(path)/**)"]
+        }
+        if let db = config.databaseFile, !config.foreignPaths.isEmpty {
+            deny += ["Read(/\(db)*)", "Edit(/\(db)*)", "Write(/\(db)*)"]
+        }
         var allow = config.agent.allowList + config.extraAllow
         // App-served tools: asking the user and asking for access are always available, delegation when configured.
         allow.append(Attention.qualifiedToolName)
@@ -122,6 +140,8 @@ public struct AgentWorkspace: Sendable {
         if !config.databases.isEmpty { allow += DashboardTools.toolNames.sorted().map(DashboardTools.qualified) }
         allow += NotesTools.toolNames(config.agent.notesAccess).map(NotesTools.qualified)
         allow += Integrations.toolNames(config.integrations).map(Integrations.qualified)
+        // Graphs only read folders the agent already works in; the app checks the path.
+        if config.codeGraph { allow += CodeGraphTools.toolNames.map(CodeGraphTools.qualified) }
         // Attachments are granted exactly: the file itself, or the folder's contents.
         for a in config.attachments where a.exists {
             let target = a.isDirectory ? "/\(a.path)/**" : "/\(a.path)"
@@ -161,7 +181,8 @@ public struct AgentWorkspace: Sendable {
                       Secrets.promptSection(config.secrets) ?? "",
                       DatabaseAccess.promptSection(config.databases) ?? "",
                       NotesTools.promptSection(config.agent.notesAccess) ?? "",
-                      Integrations.promptSection(config.integrations) ?? ""]
+                      Integrations.promptSection(config.integrations) ?? "",
+                      config.codeGraph ? CodeGraphTools.promptSection(CodeGraphTools.roots(config)) : ""]
             .filter { !$0.isEmpty }.joined(separator: "\n\n")
         if !prompt.isEmpty {
             args += ["--append-system-prompt", prompt]

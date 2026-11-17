@@ -92,13 +92,14 @@ struct IsolationTests {
         #expect(wrapped.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-abcdef")
     }
 
+    /// Without a container token (and no account on the run) the run can't start; the status
+    /// no longer says so, since an agent's own Claude account may supply the login.
     @Test func dockerWithoutTokenIsUnavailable() throws {
         guard DockerEngine.dockerExecutable() != nil else { return }
         let engine = DockerEngine(paths: paths, credentials: MemorySecretStore())
         let spec = LaunchSpec(executable: URL(fileURLWithPath: "/bin/true"), arguments: [], cwd: root, environment: [:],
                               agentEnvironment: [], mounts: [], runId: "r")
         #expect(throws: ClaudistError.self) { try engine.wrap(spec) }
-        if case .ready = engine.status() { Issue.record("no token must not be ready") }
     }
 
     @Test func engineSettingDefaultsToDocker() {
